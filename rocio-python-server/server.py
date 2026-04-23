@@ -35,6 +35,7 @@ import signal
 import hashlib
 import configparser
 import socket
+import sqlite3
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -53,7 +54,8 @@ from flask_cors import CORS
 # ─────────────────────────────────────────────────────────────────
 
 BASE_DIR       = Path(__file__).parent.resolve()
-CONFIG_FILE    = BASE_DIR / "rocio.conf"       # Credenciales (usuario/clave)
+CONFIG_FILE    = BASE_DIR / "rocio.conf"       # Credenciales admin inicial (usuario/clave)
+DB_FILE        = BASE_DIR / "rocio.db"         # Base de datos de perfiles de usuario
 CONN_LOG_FILE  = BASE_DIR / "connections.log"  # Registro de conexiones
 PID_FILE       = BASE_DIR / "rocio.pid"        # PID del proceso demonio
 SERVER_LOG     = BASE_DIR / "server.log"       # Log del servidor en modo demonio
@@ -138,6 +140,201 @@ def change_password(new_password: str, config: configparser.ConfigParser):
     with open(CONFIG_FILE, "w") as f:
         config.write(f)
     print(f"✅ Contraseña actualizada en {CONFIG_FILE}")
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 4.5: BASE DE DATOS SQLite — Perfiles de usuario
+#
+# rocio.db contiene dos tablas:
+#   users          — todos los perfiles de Rocio
+#   login_attempts — registro de intentos de autenticación (rate limiting)
+#
+# Esquema de users:
+#   id           INTEGER PRIMARY KEY
+#   username     TEXT UNIQUE NOT NULL
+#   password_hash TEXT NOT NULL
+#   role         TEXT  ('admin' | 'user')
+#   allowed_dirs TEXT  JSON — lista de rutas permitidas ([] = sin restricción)
+#   system_user  INTEGER 0/1 — si usa autenticación PAM del sistema operativo
+#   created_at   TEXT
+#   last_login   TEXT
+#
+# SEGURIDAD:
+#   - El usuario 'root' nunca puede autenticarse via web (bloqueado por código)
+#   - Los usuarios del sistema requieren que allow_system_users = true en rocio.conf
+#   - Rate limiting: máx. 10 intentos fallidos / IP en 5 minutos
+#   - Las contraseñas se almacenan siempre como hash SHA-256
+# ─────────────────────────────────────────────────────────────────
+
+def get_db():
+    """Retorna una conexión SQLite con filas como diccionarios."""
+    conn = sqlite3.connect(str(DB_FILE))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """
+    Crea las tablas si no existen y siembra el admin desde rocio.conf.
+    Se llama una sola vez al arrancar el servidor.
+    """
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL DEFAULT '',
+                role          TEXT NOT NULL DEFAULT 'user',
+                allowed_dirs  TEXT NOT NULL DEFAULT '[]',
+                system_user   INTEGER NOT NULL DEFAULT 0,
+                created_at    TEXT DEFAULT (datetime('now')),
+                last_login    TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip       TEXT,
+                username TEXT,
+                ts       TEXT DEFAULT (datetime('now')),
+                success  INTEGER DEFAULT 0
+            )
+        """)
+        conn.commit()
+
+        # Sembrar admin desde rocio.conf si la tabla está vacía
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if count == 0:
+            conf = load_config()
+            admin_user = conf.get("auth", "username", fallback="rocio")
+            admin_hash = conf.get("auth", "password_hash",
+                                  fallback=hash_password("rocio123"))
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, allowed_dirs) "
+                "VALUES (?, ?, 'admin', '[]')",
+                (admin_user, admin_hash),
+            )
+            conn.commit()
+            print(f"  ► Perfil admin '{admin_user}' importado desde rocio.conf")
+
+
+# ──── Funciones de acceso a la base de datos ─────────────────────
+
+def db_get_user(username: str) -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def db_verify_credentials(username: str, password: str) -> Optional[dict]:
+    """
+    Verifica usuario y contraseña contra rocio.db.
+    Retorna el dict del usuario si es válido, o None si falla.
+    El usuario 'root' siempre es rechazado para prevenir escalada de privilegios.
+    """
+    # Bloqueo explícito de root — nunca permitir login de root via web
+    if username.lower() == "root":
+        logger.warning("Intento de login como root bloqueado por política de seguridad.")
+        return None
+
+    user = db_get_user(username)
+    if not user:
+        return None
+
+    if user["system_user"]:
+        return _verify_system_user(username, password, user)
+
+    if user["password_hash"] == hash_password(password):
+        _db_update_last_login(username)
+        return user
+
+    return None
+
+
+def _verify_system_user(username: str, password: str, user_row: dict) -> Optional[dict]:
+    """
+    Verifica credenciales contra el sistema operativo (PAM).
+    SOLO se activa si el usuario tiene system_user=1 en la BD
+    Y si allow_system_users=true en rocio.conf.
+    NUNCA autentica a 'root'.
+    """
+    if username.lower() == "root":
+        return None
+
+    allow = CONFIG.getboolean("auth", "allow_system_users", fallback=False)
+    if not allow:
+        logger.warning(
+            f"Intento de login de sistema rechazado: "
+            f"allow_system_users no está habilitado en rocio.conf"
+        )
+        return None
+
+    # Intentar via python-pam (método preferido)
+    try:
+        import pam as pam_module  # pip install python-pam
+        p = pam_module.pam()
+        if p.authenticate(username, password):
+            _db_update_last_login(username)
+            return user_row
+        return None
+    except ImportError:
+        pass
+
+    # Fallback: subprocess con timeout estricto
+    # NOTA: requiere que el servidor tenga permisos suficientes (grupo shadow)
+    try:
+        # Sanitizar: solo letras, números y guiones en el nombre de usuario
+        import re
+        if not re.match(r'^[a-zA-Z0-9_\-]+$', username):
+            logger.error(f"Nombre de usuario inválido rechazado: {username!r}")
+            return None
+        result = subprocess.run(
+            ["su", "-s", "/bin/sh", "-c", "echo __ok__", username],
+            input=f"{password}\n",
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if "__ok__" in result.stdout:
+            _db_update_last_login(username)
+            return user_row
+    except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError):
+        pass
+
+    return None
+
+
+def _db_update_last_login(username: str):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET last_login = datetime('now') WHERE username = ?",
+            (username,),
+        )
+        conn.commit()
+
+
+# ──── Rate limiting ───────────────────────────────────────────────
+
+def is_rate_limited(ip: str) -> bool:
+    """Bloquea si hubo más de 10 intentos fallidos desde esta IP en 5 minutos."""
+    with get_db() as conn:
+        count = conn.execute("""
+            SELECT COUNT(*) FROM login_attempts
+            WHERE ip = ? AND success = 0
+            AND ts >= datetime('now', '-5 minutes')
+        """, (ip,)).fetchone()[0]
+    return count >= 10
+
+
+def record_login_attempt(ip: str, username: str, success: bool):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO login_attempts (ip, username, success) VALUES (?, ?, ?)",
+            (ip, username, 1 if success else 0),
+        )
+        conn.commit()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -300,9 +497,11 @@ def require_auth(f):
 
         # 2) HTTP Basic Auth
         auth = request.authorization
-        if auth and verify_credentials(auth.username, auth.password, CONFIG):
-            request.authenticated_user = auth.username
-            return f(*args, **kwargs)
+        if auth:
+            user_data = db_verify_credentials(auth.username, auth.password)
+            if user_data:
+                request.authenticated_user = auth.username
+                return f(*args, **kwargs)
 
         # No autenticado
         log_connection(ip, request.method, request.path, 401,
@@ -315,6 +514,23 @@ def require_auth(f):
             headers={"WWW-Authenticate": 'Basic realm="Rocio Servidor"'},
         )
 
+    return decorated
+
+
+def require_admin(f):
+    """
+    Decorador que exige que el usuario autenticado tenga rol 'admin'.
+    Debe usarse después de @require_auth.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        username = session.get("user") or getattr(request, "authenticated_user", None)
+        if not username:
+            return jsonify({"error": "No autenticado"}), 401
+        user = db_get_user(username)
+        if not user or user.get("role") != "admin":
+            return jsonify({"error": "Se requieren privilegios de administrador"}), 403
+        return f(*args, **kwargs)
     return decorated
 
 
@@ -399,18 +615,32 @@ def api_login():
     POST /api/login
     Body: { "username": "...", "password": "..." }
     Inicia sesión y establece una cookie firmada. Sin autenticación previa.
+    Incluye rate limiting: máx. 10 intentos fallidos por IP en 5 minutos.
     """
     data = request.get_json() or {}
     username = data.get("username", "").strip()
     password = data.get("password", "")
     ip = request.remote_addr or "-"
 
-    if verify_credentials(username, password, CONFIG):
+    if is_rate_limited(ip):
+        logger.warning(f"Rate limit activado para {ip}")
+        return jsonify({"error": "Demasiados intentos fallidos. Espera 5 minutos."}), 429
+
+    user_data = db_verify_credentials(username, password)
+    record_login_attempt(ip, username, bool(user_data))
+
+    if user_data:
         session["user"] = username
+        session["role"] = user_data.get("role", "user")
         session.permanent = False
         log_connection(ip, "POST", "/api/login", 200, user=username)
-        logger.info(f"Login web exitoso: {username} desde {ip}")
-        return jsonify({"ok": True, "user": username})
+        logger.info(f"Login web exitoso: {username} ({user_data['role']}) desde {ip}")
+        return jsonify({
+            "ok": True,
+            "user": username,
+            "role": user_data.get("role", "user"),
+            "allowed_dirs": json.loads(user_data.get("allowed_dirs", "[]")),
+        })
 
     log_connection(ip, "POST", "/api/login", 401, user=username or "anon")
     logger.warning(f"Login web fallido: {username!r} desde {ip}")
@@ -419,12 +649,156 @@ def api_login():
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
-    """
-    POST /api/logout — cierra la sesión web.
-    """
+    """POST /api/logout — cierra la sesión web."""
     user = session.get("user", "-")
     session.clear()
     log_connection(request.remote_addr or "-", "POST", "/api/logout", 200, user=user)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/me", methods=["GET"])
+@require_auth
+def api_me():
+    """
+    GET /api/me — retorna información del usuario autenticado actual.
+    Incluye rol y carpetas permitidas.
+    """
+    username = session.get("user") or getattr(request, "authenticated_user", None)
+    user = db_get_user(username)
+    if not user:
+        return jsonify({"username": username, "role": "user", "allowed_dirs": []}), 200
+    return jsonify({
+        "id": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "allowed_dirs": json.loads(user.get("allowed_dirs", "[]")),
+        "system_user": bool(user["system_user"]),
+        "last_login": user.get("last_login"),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────
+# ENDPOINTS DE ADMINISTRACIÓN DE USUARIOS
+# Todos requieren @require_auth + @require_admin
+# ─────────────────────────────────────────────────────────────────
+
+@app.route("/api/admin/users", methods=["GET"])
+@require_auth
+@require_admin
+def admin_list_users():
+    """GET /api/admin/users — lista todos los perfiles de usuario."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, username, role, allowed_dirs, system_user, created_at, last_login "
+            "FROM users ORDER BY id"
+        ).fetchall()
+    return jsonify([{
+        "id": r["id"],
+        "username": r["username"],
+        "role": r["role"],
+        "allowed_dirs": json.loads(r["allowed_dirs"] or "[]"),
+        "system_user": bool(r["system_user"]),
+        "created_at": r["created_at"],
+        "last_login": r["last_login"],
+    } for r in rows])
+
+
+@app.route("/api/admin/users", methods=["POST"])
+@require_auth
+@require_admin
+def admin_create_user():
+    """
+    POST /api/admin/users — crea un nuevo perfil de usuario.
+    Body: { username, password, role, allowed_dirs, system_user }
+    """
+    data = request.get_json() or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    role = data.get("role", "user")
+    allowed_dirs = json.dumps(data.get("allowed_dirs", []))
+    system_user = 1 if data.get("system_user") else 0
+
+    if not username:
+        return jsonify({"error": "El nombre de usuario es obligatorio"}), 400
+    if username.lower() == "root":
+        return jsonify({"error": "No se puede crear cuenta web para 'root'"}), 403
+    if not password and not system_user:
+        return jsonify({"error": "Se requiere contraseña (o marcar como usuario del sistema)"}), 400
+    if role not in ("admin", "user"):
+        return jsonify({"error": "El rol debe ser 'admin' o 'user'"}), 400
+
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, allowed_dirs, system_user) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (username, hash_password(password) if password else "", role, allowed_dirs, system_user),
+            )
+            conn.commit()
+        logger.info(f"Nuevo usuario creado: {username} (rol: {role})")
+        return jsonify({"ok": True, "username": username}), 201
+    except sqlite3.IntegrityError:
+        return jsonify({"error": f"El usuario '{username}' ya existe"}), 409
+
+
+@app.route("/api/admin/users/<int:user_id>", methods=["PUT"])
+@require_auth
+@require_admin
+def admin_update_user(user_id):
+    """
+    PUT /api/admin/users/<id> — actualiza un perfil de usuario.
+    Body: { role?, password?, allowed_dirs?, system_user? }
+    """
+    data = request.get_json() or {}
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        new_role = data.get("role", row["role"])
+        new_dirs = json.dumps(data.get("allowed_dirs", json.loads(row["allowed_dirs"] or "[]")))
+        new_sys = 1 if data.get("system_user", row["system_user"]) else 0
+        new_hash = hash_password(data["password"]) if data.get("password") else row["password_hash"]
+
+        if new_role not in ("admin", "user"):
+            return jsonify({"error": "El rol debe ser 'admin' o 'user'"}), 400
+
+        # No degradar al último admin
+        if row["role"] == "admin" and new_role != "admin":
+            count = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role='admin'"
+            ).fetchone()[0]
+            if count <= 1:
+                return jsonify({"error": "No se puede quitar el rol al único administrador"}), 403
+
+        conn.execute(
+            "UPDATE users SET role=?, allowed_dirs=?, system_user=?, password_hash=? WHERE id=?",
+            (new_role, new_dirs, new_sys, new_hash, user_id),
+        )
+        conn.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/users/<int:user_id>", methods=["DELETE"])
+@require_auth
+@require_admin
+def admin_delete_user(user_id):
+    """DELETE /api/admin/users/<id> — elimina un perfil de usuario."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT username, role FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        if row["role"] == "admin":
+            count = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role='admin'"
+            ).fetchone()[0]
+            if count <= 1:
+                return jsonify({"error": "No se puede eliminar el único administrador"}), 403
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+    logger.info(f"Usuario eliminado: {row['username']}")
     return jsonify({"ok": True})
 
 
@@ -884,6 +1258,9 @@ Ejemplos:
 
     # ── Cargar configuración ──────────────────────────────────────
     CONFIG = load_config()
+
+    # ── Inicializar base de datos de usuarios ─────────────────────
+    init_db()
 
     # ── Detener demonio ───────────────────────────────────────────
     if args.stop:
