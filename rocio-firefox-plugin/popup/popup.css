@@ -1,0 +1,274 @@
+/*
+ * ╔══════════════════════════════════════════════════════╗
+ * ║  ROCIO Firefox Plugin — Estilos del Popup           ║
+ * ╚══════════════════════════════════════════════════════╝
+ */
+
+/* ── Variables de tema oscuro ── */
+:root {
+  --bg: #0d1117;
+  --bg-card: #161b22;
+  --bg-input: #21262d;
+  --border: #30363d;
+  --primary: #00d2dc;
+  --primary-dark: #00aab4;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --danger: #f85149;
+  --green: #3fb950;
+  --whatsapp: #25D366;
+  --telegram: #2CA5E0;
+  --facebook: #1877F2;
+  --instagram: #E1306C;
+  --radius: 8px;
+  --radius-sm: 5px;
+}
+
+/* ── Reset y base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 340px;
+  min-height: 450px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  overflow-x: hidden;
+}
+
+/* ── Encabezado ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+.logo { display: flex; align-items: center; gap: 10px; }
+.logo-icon {
+  width: 32px; height: 32px;
+  background: var(--primary);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; color: #000; font-weight: bold;
+}
+.logo-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.logo-sub { font-size: 10px; color: var(--text-muted); }
+
+/* ── Indicador de estado del servidor ── */
+.status-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  cursor: pointer;
+}
+.status-unknown { background: var(--text-muted); }
+.status-ok { background: var(--green); }
+.status-error { background: var(--danger); }
+
+/* ── Pestañas de navegación ── */
+.tabs {
+  display: flex;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  flex: 1;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+/* ── Paneles ── */
+.panel { display: none; padding: 12px 14px; }
+.panel.active { display: block; }
+
+/* ── Área de video ── */
+.video-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+#video-player { width: 100%; height: 100%; display: none; }
+.video-placeholder {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 6px; color: var(--text-muted); font-size: 12px;
+}
+.placeholder-icon {
+  font-size: 28px; color: var(--primary); opacity: 0.4;
+}
+
+/* ── Controles de reproducción ── */
+.controls {
+  display: flex; justify-content: center; gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* ── Velocidad ── */
+.speed-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 10px;
+}
+.speed-buttons { display: flex; gap: 4px; }
+.speed-btn {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: 11px; cursor: pointer;
+  transition: all 0.15s;
+}
+.speed-btn:hover { color: var(--text); }
+.speed-btn.active {
+  background: var(--primary);
+  color: #000;
+  border-color: var(--primary);
+  font-weight: 600;
+}
+
+/* ── Botones generales ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: none; cursor: pointer;
+  font-size: 12px; font-weight: 500;
+  transition: all 0.15s;
+  text-decoration: none;
+}
+.btn:hover { opacity: 0.85; }
+.btn-primary { background: var(--primary); color: #000; }
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.btn-outline:hover { color: var(--text); border-color: var(--text-muted); }
+.btn-icon {
+  width: 36px; height: 36px; padding: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 16px;
+}
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.btn-sm:hover { color: var(--text); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-full { width: 100%; margin-bottom: 8px; }
+
+/* ── Formularios ── */
+.form-group { margin-bottom: 10px; }
+.label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
+.input {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.input:focus { border-color: var(--primary); }
+.input-row { display: flex; gap: 6px; }
+.input-row .input { flex: 1; }
+
+/* ── Mensaje de estado URL ── */
+.status-msg {
+  min-height: 20px;
+  font-size: 11px;
+  padding: 4px 0;
+  color: var(--primary);
+}
+
+/* ── Badges de plataformas ── */
+.platforms {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin-top: 8px;
+}
+.platform-badge {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── Segmento ── */
+.segment-info {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+.segment-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px;
+}
+.segment-row:last-child { margin-bottom: 0; }
+.time-display {
+  font-family: monospace; font-size: 13px; font-weight: 600;
+  color: var(--primary); flex: 1;
+}
+.time-display.muted { color: var(--text-muted); }
+.checkbox-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-muted);
+  cursor: pointer; margin-bottom: 10px;
+}
+
+/* ── Redes sociales ── */
+.social-btn {
+  width: 100%;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px;
+  margin-bottom: 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer; font-size: 13px; font-weight: 500;
+  transition: all 0.15s;
+}
+.social-btn:hover { opacity: 0.85; transform: translateY(-1px); }
+.social-icon { font-size: 16px; width: 20px; text-align: center; }
+.whatsapp { background: rgba(37,211,102,0.1); border-color: rgba(37,211,102,0.25); color: var(--whatsapp); }
+.telegram { background: rgba(44,165,224,0.1); border-color: rgba(44,165,224,0.25); color: var(--telegram); }
+.facebook { background: rgba(24,119,242,0.1); border-color: rgba(24,119,242,0.25); color: var(--facebook); }
+.instagram { background: rgba(225,48,108,0.1); border-color: rgba(225,48,108,0.25); color: var(--instagram); }
+
+.divider { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
+/* ── Pie de página ── */
+.footer {
+  display: flex; justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-muted);
+}
+.footer a { color: var(--primary); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
