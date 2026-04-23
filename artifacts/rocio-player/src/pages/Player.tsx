@@ -242,6 +242,8 @@ function FileTreeNode({
   onToggleOpen,
   onSelectFile,
   onAddFavorite,
+  onToggleFileFav,
+  fileFavIds,
   depth = 0,
 }: {
   node: FileNode;
@@ -249,8 +251,13 @@ function FileTreeNode({
   onToggleOpen: (id: string) => void;
   onSelectFile: (node: FileNode) => void;
   onAddFavorite: (node: FileNode) => void;
+  onToggleFileFav: (id: string) => void;
+  fileFavIds: Set<string>;
   depth?: number;
 }) {
+  const isMediaFile = node.type === "video" || node.type === "audio";
+  const isFav = isMediaFile && fileFavIds.has(node.id);
+
   const Icon = () => {
     if (node.type === "folder") return node.isOpen
       ? <FolderOpen className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />
@@ -292,14 +299,29 @@ function FileTreeNode({
           {node.name}
         </span>
 
-        {/* Botón favorito (solo en carpetas) */}
+        {/* ★ Carpetas → agregar a favoritos de carpeta */}
         {node.type === "folder" && (
           <button
             onClick={() => onAddFavorite(node)}
             className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-yellow-400 flex-shrink-0"
-            title="Añadir a Favoritos"
+            title="Añadir carpeta a Favoritos"
           >
             <Star className="w-3 h-3" />
+          </button>
+        )}
+
+        {/* ★ Archivos de video/audio → toggle favorito de archivo */}
+        {isMediaFile && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleFileFav(node.id); }}
+            className={`transition-opacity flex-shrink-0 ${
+              isFav
+                ? "opacity-100 text-yellow-400 hover:text-yellow-300"
+                : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-yellow-400"
+            }`}
+            title={isFav ? "Quitar de Favoritos" : "Agregar a Favoritos"}
+          >
+            <Star className={`w-3 h-3 ${isFav ? "fill-yellow-400" : ""}`} />
           </button>
         )}
       </div>
@@ -315,6 +337,8 @@ function FileTreeNode({
               onToggleOpen={onToggleOpen}
               onSelectFile={onSelectFile}
               onAddFavorite={onAddFavorite}
+              onToggleFileFav={onToggleFileFav}
+              fileFavIds={fileFavIds}
               depth={depth + 1}
             />
           ))}
@@ -1824,6 +1848,8 @@ export default function Player() {
                               onToggleOpen={toggleNodeOpen}
                               onSelectFile={handleSelectFromTree}
                               onAddFavorite={addToFavorites}
+                              onToggleFileFav={toggleVideoFavorite}
+                              fileFavIds={favoriteVideoIds}
                             />
                           ))}
                         </div>
