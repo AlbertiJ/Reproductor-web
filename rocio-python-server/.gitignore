@@ -1,4 +1,8 @@
 rocio.conf
+rocio.db
+connections.log
+server.log
+rocio.pid
 __pycache__/
 *.pyc
 static/
