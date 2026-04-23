@@ -41,7 +41,7 @@ from datetime import datetime
 from functools import wraps
 
 from flask import (
-    Flask, jsonify, request, send_file,
+    Flask, jsonify, request, send_file, send_from_directory,
     abort, Response, stream_with_context,
 )
 from flask_cors import CORS
@@ -57,6 +57,7 @@ CONFIG_FILE    = BASE_DIR / "rocio.conf"       # Credenciales (usuario/clave)
 CONN_LOG_FILE  = BASE_DIR / "connections.log"  # Registro de conexiones
 PID_FILE       = BASE_DIR / "rocio.pid"        # PID del proceso demonio
 SERVER_LOG     = BASE_DIR / "server.log"       # Log del servidor en modo demonio
+STATIC_DIR     = BASE_DIR / "static"           # Reproductor web compilado (build)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -673,6 +674,70 @@ def get_connections():
         "total": len(all_lines),
         "showing": len(last_lines),
     })
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 13: RUTA — Reproductor Web (archivos estáticos)
+#
+# Sirve el reproductor React compilado desde la carpeta static/.
+# El usuario accede directamente en el navegador: http://localhost:5000
+#
+# Para compilar el reproductor y copiarlo aquí, usa:
+#   bash build.sh
+# ─────────────────────────────────────────────────────────────────
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_frontend(path):
+    """
+    Sirve los archivos estáticos del reproductor web.
+    - Cualquier ruta desconocida devuelve index.html (SPA routing).
+    - Los assets (JS, CSS, imágenes) se sirven directamente.
+    """
+    if not STATIC_DIR.exists():
+        # Si no existe la carpeta static/, mostrar instrucciones
+        return Response(
+            """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><title>Rocio — Servidor</title>
+<style>
+  body { font-family: monospace; background: #111; color: #eee;
+         display: flex; align-items: center; justify-content: center;
+         height: 100vh; margin: 0; }
+  .box { max-width: 560px; padding: 40px; border: 1px solid #333;
+         border-radius: 8px; line-height: 1.8; }
+  h1 { color: #00d2dc; margin-top: 0; }
+  code { background: #222; padding: 2px 8px; border-radius: 4px;
+         color: #7df; display: block; margin: 6px 0; }
+  .ok { color: #4f4; } .dim { color: #777; }
+</style></head>
+<body><div class="box">
+  <h1>▶ Rocio — Servidor activo</h1>
+  <p>La API está funcionando en este puerto.</p>
+  <p>Para ver el reproductor web aquí, compila la interfaz:</p>
+  <code>bash build.sh</code>
+  <p class="dim">O si ya tienes el reproductor en otra carpeta:</p>
+  <code>bash build.sh --player-dir /ruta/al/reproductor</code>
+  <p>Endpoints disponibles:</p>
+  <code>GET /api/health    <span class="ok">✓ sin autenticación</span></code>
+  <code>GET /api/tree      <span class="dim">requiere usuario/clave</span></code>
+  <code>GET /api/media     <span class="dim">requiere usuario/clave</span></code>
+  <code>POST /api/download <span class="dim">requiere usuario/clave</span></code>
+</div></body></html>""",
+            status=200,
+            mimetype="text/html",
+        )
+
+    # Intentar servir el archivo pedido
+    if path and (STATIC_DIR / path).is_file():
+        return send_from_directory(STATIC_DIR, path)
+
+    # Para cualquier ruta que no sea un archivo, devolver index.html (SPA)
+    index = STATIC_DIR / "index.html"
+    if index.exists():
+        return send_from_directory(STATIC_DIR, "index.html")
+
+    return Response("Archivo no encontrado", status=404)
 
 
 # ─────────────────────────────────────────────────────────────────
