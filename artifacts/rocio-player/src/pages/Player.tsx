@@ -24,7 +24,8 @@ import {
   PanelRightClose, PanelRightOpen, PanelLeftClose, PanelLeftOpen,
   Sun, Moon, Star, StarOff, HardDrive, Heart, List,
   ChevronLeft, ChevronUp, Play as PlayIcon, LayoutGrid,
-  Ratio, Expand, Shrink,
+  Ratio, Expand, Shrink, Users, UserPlus, Trash2, Pencil,
+  ShieldCheck, ShieldOff, FolderLock,
 } from "lucide-react";
 import { SiWhatsapp, SiTelegram, SiFacebook, SiInstagram } from "react-icons/si";
 import { Button } from "@/components/ui/button";
@@ -40,10 +41,36 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 /* ================================================================
  * TIPOS
  * ================================================================ */
+
+interface UserProfile {
+  id: number;
+  username: string;
+  role: "admin" | "user";
+  allowed_dirs: string[];
+  system_user: boolean;
+  created_at?: string;
+  last_login?: string;
+}
+
 interface FileNode {
   id: string;
   name: string;
@@ -77,9 +104,9 @@ async function apiGet<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function apiPost<T>(path: string, body: unknown): Promise<T> {
+async function apiPost<T>(path: string, body: unknown, method: "POST" | "PUT" | "DELETE" = "POST"): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
+    method,
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -454,6 +481,20 @@ export default function Player() {
   const [loginError, setLoginError] = useState("");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  /* ── Perfil del usuario actual ── */
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const isAdmin = currentUser?.role === "admin";
+
+  /* ── Gestión de usuarios (solo admin) ── */
+  const [showUsersModal, setShowUsersModal] = useState(false);
+  const [usersList, setUsersList] = useState<UserProfile[]>([]);
+  const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  const [userFormData, setUserFormData] = useState({
+    username: "", password: "", role: "user", allowed_dirs: "", system_user: false,
+  });
+  const [userFormError, setUserFormError] = useState("");
+  const [isSavingUser, setIsSavingUser] = useState(false);
+
   /* ── Datos reales desde el servidor ── */
   const [videoList, setVideoList] = useState<VideoItem[]>([]);
   const [isLoadingTree, setIsLoadingTree] = useState(false);
@@ -650,8 +691,17 @@ export default function Player() {
     setIsLoggingIn(true);
     setLoginError("");
     try {
-      await apiPost<{ ok: boolean }>("/api/login", { username: loginUser, password: loginPass });
+      const result = await apiPost<{ ok: boolean; role: string; allowed_dirs: string[] }>(
+        "/api/login", { username: loginUser, password: loginPass }
+      );
       setIsLoggedIn(true);
+      setCurrentUser({
+        id: 0,
+        username: loginUser,
+        role: (result.role as "admin" | "user") || "user",
+        allowed_dirs: result.allowed_dirs || [],
+        system_user: false,
+      });
     } catch (err: unknown) {
       setLoginError((err as Error).message || "Error de conexión con el servidor");
     } finally {
@@ -662,11 +712,84 @@ export default function Player() {
   const handleLogout = async () => {
     await apiPost("/api/logout", {}).catch(() => {});
     setIsLoggedIn(false);
+    setCurrentUser(null);
     setVideoList([]);
     setDiskTree([]);
     setMediaSource(null);
     setActiveVideoId(null);
     setMediaName("");
+  };
+
+  /* ── Gestión de usuarios (solo admin) ── */
+  const fetchUsers = async () => {
+    try {
+      const data = await apiGet<UserProfile[]>("/api/admin/users");
+      setUsersList(data);
+    } catch {
+      toast({ title: "Error", description: "No se pudo cargar la lista de usuarios", variant: "destructive" });
+    }
+  };
+
+  const openUsersModal = () => {
+    fetchUsers();
+    setShowUsersModal(true);
+    setEditingUser(null);
+    setUserFormData({ username: "", password: "", role: "user", allowed_dirs: "", system_user: false });
+    setUserFormError("");
+  };
+
+  const startEditUser = (u: UserProfile) => {
+    setEditingUser(u);
+    setUserFormData({
+      username: u.username,
+      password: "",
+      role: u.role,
+      allowed_dirs: u.allowed_dirs.join("\n"),
+      system_user: u.system_user,
+    });
+    setUserFormError("");
+  };
+
+  const handleSaveUser = async () => {
+    setIsSavingUser(true);
+    setUserFormError("");
+    try {
+      const body = {
+        username: userFormData.username.trim(),
+        password: userFormData.password,
+        role: userFormData.role,
+        allowed_dirs: userFormData.allowed_dirs.split("\n").map(d => d.trim()).filter(Boolean),
+        system_user: userFormData.system_user,
+      };
+      if (editingUser) {
+        await apiPost(`/api/admin/users/${editingUser.id}`, body, "PUT");
+      } else {
+        await apiPost("/api/admin/users", body);
+      }
+      await fetchUsers();
+      setEditingUser(null);
+      setUserFormData({ username: "", password: "", role: "user", allowed_dirs: "", system_user: false });
+      toast({ title: editingUser ? "Usuario actualizado" : "Usuario creado" });
+    } catch (err: unknown) {
+      setUserFormError((err as Error).message || "Error al guardar");
+    } finally {
+      setIsSavingUser(false);
+    }
+  };
+
+  const handleDeleteUser = async (u: UserProfile) => {
+    if (!confirm(`¿Eliminar al usuario "${u.username}"?`)) return;
+    try {
+      await apiPost(`/api/admin/users/${u.id}`, {}, "DELETE");
+      await fetchUsers();
+      if (editingUser?.id === u.id) {
+        setEditingUser(null);
+        setUserFormData({ username: "", password: "", role: "user", allowed_dirs: "", system_user: false });
+      }
+      toast({ title: "Usuario eliminado" });
+    } catch (err: unknown) {
+      toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
+    }
   };
 
   const selectVideoItem = useCallback((item: VideoItem) => {
@@ -947,6 +1070,33 @@ export default function Player() {
         )}
 
         <div className="flex items-center gap-1 ml-auto">
+          {/* Indicador de usuario actual */}
+          {currentUser && (
+            <div className="hidden sm:flex items-center gap-1.5 mr-1 px-2 py-1 rounded-md bg-secondary/50 text-xs text-muted-foreground">
+              {currentUser.role === "admin"
+                ? <ShieldCheck className="w-3 h-3 text-primary" />
+                : <ShieldOff className="w-3 h-3" />}
+              <span className="font-medium text-foreground">{currentUser.username}</span>
+            </div>
+          )}
+
+          {/* Gestión de usuarios (solo admin) */}
+          {isAdmin && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost" size="icon"
+                  onClick={openUsersModal}
+                  className="h-8 w-8"
+                  data-testid="button-users-admin"
+                >
+                  <Users className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Gestión de usuarios</TooltipContent>
+            </Tooltip>
+          )}
+
           {/* Cerrar sesión */}
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1886,6 +2036,192 @@ export default function Player() {
           </aside>
         )}
       </div>
+
+      {/* ================================================================
+       * DIÁLOGO DE GESTIÓN DE USUARIOS (solo admins)
+       * ================================================================ */}
+      <Dialog open={showUsersModal} onOpenChange={setShowUsersModal}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-primary" />
+              Gestión de usuarios
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* ── Lista de usuarios ── */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+                  Usuarios ({usersList.length})
+                </h3>
+                <Button variant="outline" size="sm" className="h-7 gap-1 text-xs"
+                  onClick={() => { setEditingUser(null); setUserFormData({ username: "", password: "", role: "user", allowed_dirs: "", system_user: false }); setUserFormError(""); }}>
+                  <UserPlus className="w-3 h-3" /> Nuevo
+                </Button>
+              </div>
+              <div className="space-y-1 max-h-72 overflow-y-auto pr-1">
+                {usersList.length === 0 && (
+                  <p className="text-sm text-muted-foreground text-center py-4">Sin usuarios</p>
+                )}
+                {usersList.map(u => (
+                  <div key={u.id}
+                    className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${editingUser?.id === u.id ? "border-primary bg-primary/5" : "border-border hover:bg-secondary/40"}`}
+                    onClick={() => startEditUser(u)}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        {u.role === "admin"
+                          ? <ShieldCheck className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                          : <ShieldOff className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
+                        <span className="text-sm font-medium truncate">{u.username}</span>
+                        {u.system_user && (
+                          <Badge variant="secondary" className="text-[9px] px-1 py-0">SO</Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <Badge variant={u.role === "admin" ? "default" : "outline"} className="text-[9px] px-1 py-0">
+                          {u.role === "admin" ? "Admin" : "Usuario"}
+                        </Badge>
+                        {u.allowed_dirs.length > 0 && (
+                          <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                            <FolderLock className="w-2.5 h-2.5" />
+                            {u.allowed_dirs.length} carpeta{u.allowed_dirs.length !== 1 ? "s" : ""}
+                          </span>
+                        )}
+                      </div>
+                      {u.last_login && (
+                        <p className="text-[9px] text-muted-foreground mt-0.5">
+                          Último acceso: {new Date(u.last_login).toLocaleString("es")}
+                        </p>
+                      )}
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 flex-shrink-0"
+                      onClick={e => { e.stopPropagation(); handleDeleteUser(u); }}>
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Formulario crear / editar ── */}
+            <div className="space-y-3 border-l border-border pl-4">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <Pencil className="w-3.5 h-3.5" />
+                {editingUser ? `Editar: ${editingUser.username}` : "Nuevo usuario"}
+              </h3>
+
+              {/* Nombre de usuario */}
+              <div className="space-y-1">
+                <Label className="text-xs">Nombre de usuario</Label>
+                <Input
+                  value={userFormData.username}
+                  onChange={e => setUserFormData(p => ({ ...p, username: e.target.value }))}
+                  disabled={!!editingUser}
+                  placeholder="usuario123"
+                  className="h-8 text-sm"
+                  data-testid="input-user-username"
+                />
+                {editingUser && (
+                  <p className="text-[10px] text-muted-foreground">El nombre de usuario no se puede cambiar</p>
+                )}
+              </div>
+
+              {/* Contraseña */}
+              <div className="space-y-1">
+                <Label className="text-xs">
+                  {editingUser ? "Nueva contraseña (dejar vacío para no cambiar)" : "Contraseña"}
+                </Label>
+                <Input
+                  type="password"
+                  value={userFormData.password}
+                  onChange={e => setUserFormData(p => ({ ...p, password: e.target.value }))}
+                  disabled={userFormData.system_user}
+                  placeholder={userFormData.system_user ? "Usa clave del sistema" : "••••••••"}
+                  className="h-8 text-sm"
+                  data-testid="input-user-password"
+                />
+              </div>
+
+              {/* Rol */}
+              <div className="space-y-1">
+                <Label className="text-xs">Rol</Label>
+                <Select
+                  value={userFormData.role}
+                  onValueChange={v => setUserFormData(p => ({ ...p, role: v }))}
+                >
+                  <SelectTrigger className="h-8 text-sm" data-testid="select-user-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="user">Usuario — acceso según carpetas asignadas</SelectItem>
+                    <SelectItem value="admin">Admin — acceso completo + gestión de usuarios</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Carpetas permitidas */}
+              <div className="space-y-1">
+                <Label className="text-xs flex items-center gap-1.5">
+                  <FolderLock className="w-3 h-3" />
+                  Carpetas permitidas
+                  <span className="text-muted-foreground">(una por línea, vacío = todas)</span>
+                </Label>
+                <Textarea
+                  value={userFormData.allowed_dirs}
+                  onChange={e => setUserFormData(p => ({ ...p, allowed_dirs: e.target.value }))}
+                  placeholder={"/home/usuario/Videos\n/media/Series"}
+                  className="text-xs font-mono resize-none h-20"
+                  data-testid="textarea-user-dirs"
+                />
+              </div>
+
+              {/* Usuario del sistema operativo */}
+              <div className="flex items-center gap-2 p-2 rounded-lg bg-secondary/30 border border-border">
+                <Checkbox
+                  id="chk-system-user"
+                  checked={userFormData.system_user}
+                  onCheckedChange={v => setUserFormData(p => ({ ...p, system_user: !!v, password: v ? "" : p.password }))}
+                  data-testid="checkbox-system-user"
+                />
+                <div>
+                  <Label htmlFor="chk-system-user" className="text-xs font-medium cursor-pointer">
+                    Usuario del sistema operativo (Linux)
+                  </Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    Requiere <code>allow_system_users = true</code> en rocio.conf y python-pam instalado. Root bloqueado.
+                  </p>
+                </div>
+              </div>
+
+              {/* Error */}
+              {userFormError && (
+                <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded px-2 py-1.5" data-testid="text-user-form-error">
+                  {userFormError}
+                </p>
+              )}
+
+              <Button
+                onClick={handleSaveUser}
+                disabled={isSavingUser || (!editingUser && !userFormData.username)}
+                className="w-full h-8 text-sm"
+                data-testid="button-save-user"
+              >
+                {isSavingUser ? "Guardando…" : editingUser ? "Guardar cambios" : "Crear usuario"}
+              </Button>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setShowUsersModal(false)}>
+              Cerrar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
