@@ -1,0 +1,4 @@
+rocio.conf
+__pycache__/
+*.pyc
+static/
