@@ -1,0 +1,1503 @@
+/* ============================================================
+ * ROCIO — Reproductor Multimedia v2
+ * Página: Player.tsx
+ *
+ * Layout:
+ *   [Panel izquierdo: previews] | [Video central] | [Panel derecho: controles]
+ *   [Cola de reproducción desplegable debajo del video]
+ *
+ * Nuevas características:
+ *   - Panel derecho ocultable
+ *   - Panel izquierdo con previews estilo YouTube
+ *   - Directorios desde raíz del disco + sección Favoritos
+ *   - Cola de reproducción paginada (10 por página) con thumbnails
+ *   - Toggle de modo oscuro / claro
+ * ============================================================ */
+
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import {
+  Play, Pause, Volume2, VolumeX, Maximize, Minimize,
+  SkipBack, SkipForward, RotateCcw, Link2,
+  Folder, FolderOpen, Music, Video, File,
+  Share2, Clock, Scissors, ChevronRight, ChevronDown,
+  Upload, ExternalLink, Radio, Square, Circle,
+  PanelRightClose, PanelRightOpen, PanelLeftClose, PanelLeftOpen,
+  Sun, Moon, Star, StarOff, HardDrive, Heart, List,
+  ChevronLeft, ChevronUp, Play as PlayIcon, LayoutGrid,
+} from "lucide-react";
+import { SiWhatsapp, SiTelegram, SiFacebook, SiInstagram } from "react-icons/si";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
+/* ================================================================
+ * TIPOS
+ * ================================================================ */
+interface FileNode {
+  id: string;
+  name: string;
+  type: "folder" | "video" | "audio" | "file";
+  path: string;
+  checked: boolean;
+  children?: FileNode[];
+  isOpen?: boolean;
+  isFavorite?: boolean;
+}
+
+interface VideoItem {
+  id: string;
+  name: string;
+  path: string;
+  type: "video" | "audio";
+  duration: string;
+  folder: string;
+  color: string; /* color de fondo del thumbnail generado */
+}
+
+/* ================================================================
+ * DATOS DEMO: Árbol de disco raíz simulado
+ * Representa la estructura de un disco duro real
+ * ================================================================ */
+const DISK_ROOT: FileNode[] = [
+  {
+    id: "home", name: "Inicio (/home/usuario)", type: "folder",
+    path: "/home/usuario", checked: false, isOpen: true,
+    children: [
+      {
+        id: "home-videos", name: "Videos", type: "folder",
+        path: "/home/usuario/Videos", checked: false, isOpen: false,
+        children: [
+          { id: "hv-1", name: "Peliculas", type: "folder", path: "/home/usuario/Videos/Peliculas", checked: false, isOpen: false,
+            children: [
+              { id: "hv-1-1", name: "Inception.mp4", type: "video", path: "/home/usuario/Videos/Peliculas/Inception.mp4", checked: false },
+              { id: "hv-1-2", name: "Interstellar.mkv", type: "video", path: "/home/usuario/Videos/Peliculas/Interstellar.mkv", checked: false },
+              { id: "hv-1-3", name: "Dune.mp4", type: "video", path: "/home/usuario/Videos/Peliculas/Dune.mp4", checked: false },
+            ]
+          },
+          { id: "hv-2", name: "Series", type: "folder", path: "/home/usuario/Videos/Series", checked: false, isOpen: false,
+            children: [
+              { id: "hv-2-1", name: "Breaking_Bad_S01E01.mp4", type: "video", path: "/home/usuario/Videos/Series/Breaking_Bad_S01E01.mp4", checked: false },
+              { id: "hv-2-2", name: "The_Wire_S01E01.avi", type: "video", path: "/home/usuario/Videos/Series/The_Wire_S01E01.avi", checked: false },
+              { id: "hv-2-3", name: "Severance_S02E01.mkv", type: "video", path: "/home/usuario/Videos/Series/Severance_S02E01.mkv", checked: false },
+            ]
+          },
+          { id: "hv-3", name: "Documentales", type: "folder", path: "/home/usuario/Videos/Documentales", checked: false, isOpen: false,
+            children: [
+              { id: "hv-3-1", name: "Planet_Earth.mp4", type: "video", path: "/home/usuario/Videos/Documentales/Planet_Earth.mp4", checked: false },
+              { id: "hv-3-2", name: "Free_Solo.mkv", type: "video", path: "/home/usuario/Videos/Documentales/Free_Solo.mkv", checked: false },
+            ]
+          },
+          { id: "hv-4", name: "Presentacion.mp4", type: "video", path: "/home/usuario/Videos/Presentacion.mp4", checked: false },
+        ]
+      },
+      {
+        id: "home-music", name: "Musica", type: "folder",
+        path: "/home/usuario/Musica", checked: false, isOpen: false,
+        children: [
+          { id: "hm-1", name: "Rock", type: "folder", path: "/home/usuario/Musica/Rock", checked: false, isOpen: false,
+            children: [
+              { id: "hm-1-1", name: "song1.mp3", type: "audio", path: "/home/usuario/Musica/Rock/song1.mp3", checked: false },
+              { id: "hm-1-2", name: "song2.flac", type: "audio", path: "/home/usuario/Musica/Rock/song2.flac", checked: false },
+            ]
+          },
+          { id: "hm-2", name: "Jazz", type: "folder", path: "/home/usuario/Musica/Jazz", checked: false, isOpen: false,
+            children: [
+              { id: "hm-2-1", name: "miles_davis.mp3", type: "audio", path: "/home/usuario/Musica/Jazz/miles_davis.mp3", checked: false },
+            ]
+          },
+        ]
+      },
+      {
+        id: "home-dl", name: "Descargas", type: "folder",
+        path: "/home/usuario/Descargas", checked: false, isOpen: false,
+        children: [
+          { id: "hdl-1", name: "tutorial_react.mp4", type: "video", path: "/home/usuario/Descargas/tutorial_react.mp4", checked: false },
+          { id: "hdl-2", name: "podcast_ep42.mp3", type: "audio", path: "/home/usuario/Descargas/podcast_ep42.mp3", checked: false },
+          { id: "hdl-3", name: "conferencia.webm", type: "video", path: "/home/usuario/Descargas/conferencia.webm", checked: false },
+        ]
+      },
+    ]
+  },
+  {
+    id: "media", name: "Disco Externo (/media/USB)", type: "folder",
+    path: "/media/USB", checked: false, isOpen: false,
+    children: [
+      { id: "usb-1", name: "Conciertos", type: "folder", path: "/media/USB/Conciertos", checked: false, isOpen: false,
+        children: [
+          { id: "usb-1-1", name: "Pink_Floyd_Live.mp4", type: "video", path: "/media/USB/Conciertos/Pink_Floyd_Live.mp4", checked: false },
+          { id: "usb-1-2", name: "Radiohead_Live.mkv", type: "video", path: "/media/USB/Conciertos/Radiohead_Live.mkv", checked: false },
+        ]
+      },
+      { id: "usb-2", name: "Grabaciones", type: "folder", path: "/media/USB/Grabaciones", checked: false, isOpen: false,
+        children: [
+          { id: "usb-2-1", name: "reunion_2024.mp4", type: "video", path: "/media/USB/Grabaciones/reunion_2024.mp4", checked: false },
+          { id: "usb-2-2", name: "cumple_maria.mov", type: "video", path: "/media/USB/Grabaciones/cumple_maria.mov", checked: false },
+        ]
+      },
+    ]
+  },
+];
+
+/* ================================================================
+ * DATOS DEMO: Lista de videos para el panel izquierdo y cola
+ * Colores de thumbnail generados (sin imágenes externas)
+ * ================================================================ */
+const DEMO_VIDEOS: VideoItem[] = [
+  { id: "v1", name: "Inception.mp4", path: "/home/usuario/Videos/Peliculas/Inception.mp4", type: "video", duration: "2:28:23", folder: "Peliculas", color: "from-blue-900 to-blue-600" },
+  { id: "v2", name: "Interstellar.mkv", path: "/home/usuario/Videos/Peliculas/Interstellar.mkv", type: "video", duration: "2:49:03", folder: "Peliculas", color: "from-indigo-900 to-purple-700" },
+  { id: "v3", name: "Dune.mp4", path: "/home/usuario/Videos/Peliculas/Dune.mp4", type: "video", duration: "2:35:01", folder: "Peliculas", color: "from-amber-900 to-orange-600" },
+  { id: "v4", name: "Breaking_Bad_S01E01.mp4", path: "/home/usuario/Videos/Series/Breaking_Bad_S01E01.mp4", type: "video", duration: "58:00", folder: "Series", color: "from-green-900 to-emerald-600" },
+  { id: "v5", name: "The_Wire_S01E01.avi", path: "/home/usuario/Videos/Series/The_Wire_S01E01.avi", type: "video", duration: "57:30", folder: "Series", color: "from-gray-800 to-slate-600" },
+  { id: "v6", name: "Severance_S02E01.mkv", path: "/home/usuario/Videos/Series/Severance_S02E01.mkv", type: "video", duration: "52:15", folder: "Series", color: "from-sky-900 to-cyan-700" },
+  { id: "v7", name: "Planet_Earth.mp4", path: "/home/usuario/Videos/Documentales/Planet_Earth.mp4", type: "video", duration: "50:00", folder: "Documentales", color: "from-teal-900 to-green-600" },
+  { id: "v8", name: "Free_Solo.mkv", path: "/home/usuario/Videos/Documentales/Free_Solo.mkv", type: "video", duration: "1:40:12", folder: "Documentales", color: "from-red-900 to-rose-600" },
+  { id: "v9", name: "tutorial_react.mp4", path: "/home/usuario/Descargas/tutorial_react.mp4", type: "video", duration: "1:22:45", folder: "Descargas", color: "from-violet-900 to-purple-600" },
+  { id: "v10", name: "conferencia.webm", path: "/home/usuario/Descargas/conferencia.webm", type: "video", duration: "45:00", folder: "Descargas", color: "from-pink-900 to-rose-700" },
+  { id: "v11", name: "Pink_Floyd_Live.mp4", path: "/media/USB/Conciertos/Pink_Floyd_Live.mp4", type: "video", duration: "1:55:00", folder: "Conciertos", color: "from-fuchsia-900 to-pink-600" },
+  { id: "v12", name: "Radiohead_Live.mkv", path: "/media/USB/Conciertos/Radiohead_Live.mkv", type: "video", duration: "2:02:10", folder: "Conciertos", color: "from-zinc-800 to-neutral-600" },
+  { id: "v13", name: "reunion_2024.mp4", path: "/media/USB/Grabaciones/reunion_2024.mp4", type: "video", duration: "1:12:30", folder: "Grabaciones", color: "from-blue-800 to-sky-600" },
+  { id: "v14", name: "cumple_maria.mov", path: "/media/USB/Grabaciones/cumple_maria.mov", type: "video", duration: "28:15", folder: "Grabaciones", color: "from-yellow-800 to-amber-600" },
+  { id: "v15", name: "Presentacion.mp4", path: "/home/usuario/Videos/Presentacion.mp4", type: "video", duration: "15:20", folder: "Videos", color: "from-cyan-900 to-teal-600" },
+  { id: "a1", name: "miles_davis.mp3", path: "/home/usuario/Musica/Jazz/miles_davis.mp3", type: "audio", duration: "5:42", folder: "Jazz", color: "from-purple-900 to-violet-700" },
+  { id: "a2", name: "song1.mp3", path: "/home/usuario/Musica/Rock/song1.mp3", type: "audio", duration: "3:15", folder: "Rock", color: "from-red-800 to-orange-600" },
+  { id: "a3", name: "podcast_ep42.mp3", path: "/home/usuario/Descargas/podcast_ep42.mp3", type: "audio", duration: "1:02:00", folder: "Descargas", color: "from-lime-900 to-green-700" },
+];
+
+const ITEMS_PER_PAGE = 10;
+
+/* ================================================================
+ * UTILIDADES
+ * ================================================================ */
+function formatTime(seconds: number): string {
+  if (isNaN(seconds)) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function detectUrlType(url: string): "youtube" | "vimeo" | "direct" | "unknown" {
+  if (url.includes("youtube.com") || url.includes("youtu.be")) return "youtube";
+  if (url.includes("vimeo.com")) return "vimeo";
+  if (url.match(/\.(mp4|webm|ogg|mp3|wav|flac|mkv|avi)(\?.*)?$/i)) return "direct";
+  return "unknown";
+}
+
+function toYoutubeEmbed(url: string): string {
+  const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/);
+  if (match) return `https://www.youtube.com/embed/${match[1]}?autoplay=1`;
+  return url;
+}
+
+function toVimeoEmbed(url: string): string {
+  const match = url.match(/vimeo\.com\/(\d+)/);
+  if (match) return `https://player.vimeo.com/video/${match[1]}?autoplay=1`;
+  return url;
+}
+
+/* ================================================================
+ * COMPONENTE: VideoThumbnail — thumbnail generado por gradiente
+ * ================================================================ */
+function VideoThumbnail({
+  item,
+  size = "md",
+}: {
+  item: VideoItem;
+  size?: "sm" | "md" | "lg";
+}) {
+  const sizes = {
+    sm: "w-20 h-12",
+    md: "w-full h-full",
+    lg: "w-full h-32",
+  };
+  return (
+    <div className={`relative ${sizes[size]} bg-gradient-to-br ${item.color} rounded overflow-hidden flex items-center justify-center group-hover:opacity-90 transition-opacity`}>
+      {item.type === "audio"
+        ? <Music className="w-5 h-5 text-white/60" />
+        : <Video className="w-5 h-5 text-white/40" />
+      }
+      {/* Overlay de play */}
+      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center">
+        <Play className="w-5 h-5 text-white opacity-0 group-hover:opacity-80 transition-opacity" />
+      </div>
+      {/* Duración */}
+      <span className="absolute bottom-1 right-1 text-[10px] bg-black/70 text-white px-1 rounded font-mono">
+        {item.duration}
+      </span>
+    </div>
+  );
+}
+
+/* ================================================================
+ * COMPONENTE: FileTreeNode — árbol de directorios
+ * ================================================================ */
+function FileTreeNode({
+  node,
+  onToggleCheck,
+  onToggleOpen,
+  onSelectFile,
+  onAddFavorite,
+  depth = 0,
+}: {
+  node: FileNode;
+  onToggleCheck: (id: string) => void;
+  onToggleOpen: (id: string) => void;
+  onSelectFile: (node: FileNode) => void;
+  onAddFavorite: (node: FileNode) => void;
+  depth?: number;
+}) {
+  const Icon = () => {
+    if (node.type === "folder") return node.isOpen
+      ? <FolderOpen className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />
+      : <Folder className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />;
+    if (node.type === "video") return <Video className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />;
+    if (node.type === "audio") return <Music className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />;
+    return <File className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />;
+  };
+
+  return (
+    <div>
+      <div
+        className="flex items-center gap-1 py-0.5 px-1 rounded hover:bg-secondary/40 cursor-pointer group"
+        style={{ paddingLeft: `${depth * 14 + 4}px` }}
+      >
+        {/* Checkbox */}
+        <Checkbox
+          checked={node.checked}
+          onCheckedChange={() => onToggleCheck(node.id)}
+          className="border-border w-3.5 h-3.5 flex-shrink-0"
+        />
+
+        {/* Expandir carpeta */}
+        {node.type === "folder" && node.children?.length ? (
+          <button onClick={() => onToggleOpen(node.id)} className="text-muted-foreground hover:text-foreground flex-shrink-0">
+            {node.isOpen
+              ? <ChevronDown className="w-3 h-3" />
+              : <ChevronRight className="w-3 h-3" />}
+          </button>
+        ) : <span className="w-3 flex-shrink-0" />}
+
+        <Icon />
+
+        {/* Nombre */}
+        <span
+          className="text-xs truncate flex-1 min-w-0 text-foreground/75 group-hover:text-foreground"
+          onClick={() => node.type !== "folder" ? onSelectFile(node) : onToggleOpen(node.id)}
+        >
+          {node.name}
+        </span>
+
+        {/* Botón favorito (solo en carpetas) */}
+        {node.type === "folder" && (
+          <button
+            onClick={() => onAddFavorite(node)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-yellow-400 flex-shrink-0"
+            title="Añadir a Favoritos"
+          >
+            <Star className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+
+      {/* Hijos */}
+      {node.type === "folder" && node.isOpen && node.children && (
+        <div>
+          {node.children.map(child => (
+            <FileTreeNode
+              key={child.id}
+              node={child}
+              onToggleCheck={onToggleCheck}
+              onToggleOpen={onToggleOpen}
+              onSelectFile={onSelectFile}
+              onAddFavorite={onAddFavorite}
+              depth={depth + 1}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+ * COMPONENTE: VideoListItem — item de video en panel izquierdo
+ * Formato YouTube sidebar
+ * ================================================================ */
+function VideoListItem({
+  item,
+  isActive,
+  onClick,
+}: {
+  item: VideoItem;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      data-testid={`video-item-${item.id}`}
+      className={`w-full flex gap-2.5 p-2 rounded-lg text-left group transition-all hover:bg-secondary/60 ${
+        isActive ? "bg-secondary border border-border" : ""
+      }`}
+    >
+      {/* Thumbnail pequeño */}
+      <div className="w-20 h-12 flex-shrink-0 rounded overflow-hidden group">
+        <VideoThumbnail item={item} size="sm" />
+      </div>
+      {/* Info */}
+      <div className="flex-1 min-w-0">
+        <p className={`text-xs font-medium truncate leading-tight ${isActive ? "text-primary" : "text-foreground/90"}`}>
+          {item.name}
+        </p>
+        <p className="text-[10px] text-muted-foreground mt-0.5">{item.folder}</p>
+        <p className="text-[10px] text-muted-foreground font-mono">{item.duration}</p>
+      </div>
+    </button>
+  );
+}
+
+/* ================================================================
+ * COMPONENTE: VideoQueueCard — tarjeta de vista previa en cola
+ * Más grande, para el panel desplegable inferior
+ * ================================================================ */
+function VideoQueueCard({
+  item,
+  isActive,
+  onClick,
+}: {
+  item: VideoItem;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      data-testid={`queue-card-${item.id}`}
+      className={`flex flex-col text-left group rounded-xl overflow-hidden border transition-all hover:border-primary/50 hover:shadow-lg hover:-translate-y-0.5 ${
+        isActive
+          ? "border-primary bg-primary/10"
+          : "border-border bg-card"
+      }`}
+    >
+      {/* Thumbnail grande */}
+      <div className="h-24 w-full group">
+        <VideoThumbnail item={item} size="md" />
+      </div>
+      {/* Info */}
+      <div className="p-2 space-y-0.5">
+        <p className={`text-xs font-semibold truncate leading-tight ${isActive ? "text-primary" : "text-foreground/90"}`}>
+          {item.name}
+        </p>
+        <p className="text-[10px] text-muted-foreground truncate">{item.folder}</p>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-mono text-muted-foreground">{item.duration}</span>
+          {item.type === "audio"
+            ? <Music className="w-3 h-3 text-purple-400" />
+            : <Video className="w-3 h-3 text-cyan-400" />}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/* ================================================================
+ * COMPONENTE PRINCIPAL: Player
+ * ================================================================ */
+export default function Player() {
+  const { toast } = useToast();
+
+  /* ── Tema ── */
+  const [isDark, setIsDark] = useState(true);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDark);
+  }, [isDark]);
+
+  /* ── Layout: paneles visibles ── */
+  const [showRightPanel, setShowRightPanel] = useState(true);
+  const [showLeftPanel, setShowLeftPanel] = useState(true);
+  const [showQueue, setShowQueue] = useState(false);
+  const [queuePage, setQueuePage] = useState(0);
+
+  /* ── Reproductor ── */
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(0.8);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
+
+  /* ── Fuente activa ── */
+  const [mediaSource, setMediaSource] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<"video" | "audio" | "embed" | null>(null);
+  const [mediaName, setMediaName] = useState<string>("");
+  const [embedUrl, setEmbedUrl] = useState<string>("");
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+
+  /* ── URL externa ── */
+  const [externalUrl, setExternalUrl] = useState("");
+  const [urlType, setUrlType] = useState<"youtube" | "vimeo" | "direct" | "unknown" | null>(null);
+
+  /* ── Árbol de directorios (disco raíz) ── */
+  const [diskTree, setDiskTree] = useState<FileNode[]>(DISK_ROOT);
+
+  /* ── Favoritos: carpetas marcadas como favoritas ── */
+  const [favorites, setFavorites] = useState<FileNode[]>([]);
+
+  /* ── Pestaña activa del panel derecho ── */
+  const [rightTab, setRightTab] = useState<"library" | "favorites" | "url" | "segment" | "share">("library");
+
+  /* ── Pestaña del explorador de directorios ── */
+  const [libraryTab, setLibraryTab] = useState<"disk" | "favorites">("disk");
+
+  /* ── Grabación ── */
+  const [segmentStart, setSegmentStart] = useState(0);
+  const [segmentEnd, setSegmentEnd] = useState(0);
+  const [isSegmentMode, setIsSegmentMode] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+
+  /* ── Lista de videos activa (panel izquierdo) ── */
+  const [videoListFilter, setVideoListFilter] = useState<"all" | "video" | "audio">("all");
+  const filteredVideos = useMemo(() => {
+    if (videoListFilter === "all") return DEMO_VIDEOS;
+    return DEMO_VIDEOS.filter(v => v.type === videoListFilter);
+  }, [videoListFilter]);
+
+  /* ── Paginación de la cola ── */
+  const totalPages = Math.ceil(filteredVideos.length / ITEMS_PER_PAGE);
+  const queuePageItems = filteredVideos.slice(
+    queuePage * ITEMS_PER_PAGE,
+    queuePage * ITEMS_PER_PAGE + ITEMS_PER_PAGE
+  );
+
+  /* ================================================================
+   * EFECTO: sincronizar tiempo del video
+   * ================================================================ */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onTimeUpdate = () => setCurrentTime(video.currentTime);
+    const onDurationChange = () => setDuration(video.duration);
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("durationchange", onDurationChange);
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    return () => {
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("durationchange", onDurationChange);
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+    };
+  }, [mediaSource]);
+
+  /* ================================================================
+   * EFECTO: modo segmento — bucle automático
+   * ================================================================ */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isSegmentMode) return;
+    const checkSegment = () => {
+      if (video.currentTime >= segmentEnd && segmentEnd > segmentStart) {
+        video.pause();
+        video.currentTime = segmentStart;
+      }
+    };
+    video.addEventListener("timeupdate", checkSegment);
+    return () => video.removeEventListener("timeupdate", checkSegment);
+  }, [isSegmentMode, segmentStart, segmentEnd]);
+
+  /* ================================================================
+   * FUNCIONES DE REPRODUCCIÓN
+   * ================================================================ */
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || mediaType === "embed") return;
+    if (isPlaying) video.pause(); else video.play();
+  }, [isPlaying, mediaType]);
+
+  const handleSeek = useCallback((value: number[]) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = value[0];
+    setCurrentTime(value[0]);
+  }, []);
+
+  const handleVolume = useCallback((value: number[]) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const v = value[0];
+    video.volume = v;
+    setVolume(v);
+    setIsMuted(v === 0);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const next = !isMuted;
+    video.muted = next;
+    setIsMuted(next);
+  }, [isMuted]);
+
+  const skip = useCallback((sec: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.max(0, Math.min(duration, video.currentTime + sec));
+  }, [duration]);
+
+  const handleRate = useCallback((rate: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.playbackRate = rate;
+    setPlaybackRate(rate);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const container = playerContainerRef.current;
+    if (!container) return;
+    if (!document.fullscreenElement) {
+      container.requestFullscreen();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  /* ================================================================
+   * CARGAR ARCHIVO LOCAL INDIVIDUAL
+   * ================================================================ */
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const type = file.type.startsWith("audio") ? "audio" : "video";
+    setMediaSource(url);
+    setMediaType(type);
+    setMediaName(file.name);
+    setEmbedUrl("");
+    setActiveVideoId(null);
+    toast({ title: "Archivo cargado", description: file.name });
+  };
+
+  /* ================================================================
+   * SELECCIONAR VIDEO DE LA LISTA / ÁRBOL
+   * ================================================================ */
+  const selectVideoItem = useCallback((item: VideoItem) => {
+    setActiveVideoId(item.id);
+    setMediaName(item.name);
+    setMediaType(item.type);
+    setMediaSource(null);
+    setEmbedUrl("");
+    toast({ title: "Seleccionado", description: `${item.folder} / ${item.name}` });
+  }, []);
+
+  const handleSelectFromTree = (node: FileNode) => {
+    setMediaName(node.name);
+    setMediaType(node.type === "audio" ? "audio" : "video");
+    setMediaSource(null);
+    setEmbedUrl("");
+    setActiveVideoId(null);
+    toast({ title: "Archivo seleccionado", description: node.path });
+  };
+
+  /* ================================================================
+   * CARGAR URL EXTERNA
+   * ================================================================ */
+  const handleLoadExternalUrl = () => {
+    if (!externalUrl.trim()) {
+      toast({ title: "Error", description: "Ingresa una URL válida", variant: "destructive" });
+      return;
+    }
+    const type = detectUrlType(externalUrl);
+    setUrlType(type);
+    if (type === "youtube") {
+      setEmbedUrl(toYoutubeEmbed(externalUrl));
+      setMediaType("embed");
+      setMediaName("Video de YouTube");
+      setMediaSource(null);
+    } else if (type === "vimeo") {
+      setEmbedUrl(toVimeoEmbed(externalUrl));
+      setMediaType("embed");
+      setMediaName("Video de Vimeo");
+      setMediaSource(null);
+    } else if (type === "direct") {
+      setMediaSource(externalUrl);
+      setEmbedUrl("");
+      setMediaType("video");
+      setMediaName(externalUrl.split("/").pop() || "Video");
+    } else {
+      toast({ title: "URL no soportada", description: "Usa YouTube, Vimeo o un enlace directo", variant: "destructive" });
+      return;
+    }
+    setActiveVideoId(null);
+    toast({ title: "URL cargada", description: `Tipo: ${type}` });
+  };
+
+  /* ================================================================
+   * ÁRBOL DE DIRECTORIOS — toggle checkbox y open
+   * ================================================================ */
+  const toggleNodeCheck = (id: string) => {
+    const toggle = (nodes: FileNode[]): FileNode[] =>
+      nodes.map(n => {
+        if (n.id === id) {
+          const next = { ...n, checked: !n.checked };
+          if (n.children) next.children = n.children.map(c => ({ ...c, checked: next.checked }));
+          return next;
+        }
+        if (n.children) return { ...n, children: toggle(n.children) };
+        return n;
+      });
+    setDiskTree(toggle(diskTree));
+  };
+
+  const toggleNodeOpen = (id: string) => {
+    const toggle = (nodes: FileNode[]): FileNode[] =>
+      nodes.map(n => {
+        if (n.id === id) return { ...n, isOpen: !n.isOpen };
+        if (n.children) return { ...n, children: toggle(n.children) };
+        return n;
+      });
+    setDiskTree(toggle(diskTree));
+  };
+
+  /* ================================================================
+   * FAVORITOS — agregar carpeta a favoritos
+   * ================================================================ */
+  const addToFavorites = (node: FileNode) => {
+    if (favorites.find(f => f.id === node.id)) {
+      toast({ title: "Ya está en Favoritos", description: node.name });
+      return;
+    }
+    setFavorites(prev => [...prev, { ...node, isFavorite: true }]);
+    toast({ title: "Agregado a Favoritos", description: node.name });
+  };
+
+  const removeFromFavorites = (id: string) => {
+    setFavorites(prev => prev.filter(f => f.id !== id));
+  };
+
+  /* ================================================================
+   * GRABACIÓN POR SEGMENTO
+   * ================================================================ */
+  const markSegmentStart = () => {
+    const t = videoRef.current?.currentTime ?? 0;
+    setSegmentStart(t);
+    toast({ title: "Inicio marcado", description: formatTime(t) });
+  };
+
+  const markSegmentEnd = () => {
+    const t = videoRef.current?.currentTime ?? duration;
+    setSegmentEnd(t);
+    toast({ title: "Fin marcado", description: formatTime(t) });
+  };
+
+  const startSegmentRecording = async () => {
+    const video = videoRef.current;
+    if (!video) { toast({ title: "Error", description: "No hay video cargado", variant: "destructive" }); return; }
+    try {
+      const stream = (video as HTMLVideoElement & { captureStream: () => MediaStream }).captureStream();
+      const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+      recordedChunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `segmento_${formatTime(segmentStart)}-${formatTime(segmentEnd)}.webm`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast({ title: "Segmento guardado", description: "Descargado correctamente" });
+      };
+      mediaRecorderRef.current = recorder;
+      video.currentTime = segmentStart;
+      await video.play();
+      recorder.start();
+      setIsRecording(true);
+      toast({ title: "Grabando...", description: `${formatTime(segmentStart)} → ${formatTime(segmentEnd)}` });
+    } catch (err) {
+      toast({ title: "Error de grabación", description: String(err), variant: "destructive" });
+    }
+  };
+
+  const stopSegmentRecording = () => {
+    mediaRecorderRef.current?.stop();
+    videoRef.current?.pause();
+    setIsRecording(false);
+  };
+
+  /* ================================================================
+   * COMPARTIR
+   * ================================================================ */
+  const shareUrl = window.location.href;
+  const shareText = encodeURIComponent(`Reproduciendo: ${mediaName || "Rocio Player"}`);
+  const socialLinks = {
+    whatsapp: `https://api.whatsapp.com/send?text=${shareText}%20${encodeURIComponent(shareUrl)}`,
+    telegram: `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${shareText}`,
+    facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`,
+    instagram: null,
+  };
+  const openShare = (url: string | null, platform: string) => {
+    if (!url) { toast({ title: platform, description: "Copia el enlace y compártelo manualmente en Instagram" }); return; }
+    window.open(url, "_blank", "width=600,height=400");
+  };
+
+  /* ================================================================
+   * RENDER
+   * ================================================================ */
+  return (
+    <div className={`h-screen bg-background flex flex-col overflow-hidden ${isDark ? "dark" : ""}`}>
+
+      {/* ============================================================
+       * ENCABEZADO
+       * ============================================================ */}
+      <header className="border-b border-border px-4 py-2.5 flex items-center justify-between bg-card/60 backdrop-blur-sm sticky top-0 z-50 gap-3">
+        {/* Logo */}
+        <div className="flex items-center gap-2.5 flex-shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
+            <Radio className="w-4 h-4 text-primary-foreground" />
+          </div>
+          <div className="hidden sm:block">
+            <h1 className="font-bold text-foreground text-sm tracking-tight leading-none">Rocio</h1>
+            <p className="text-[10px] text-muted-foreground">Reproductor Multimedia</p>
+          </div>
+        </div>
+
+        {/* Nombre de media activa */}
+        {mediaName && (
+          <Badge variant="secondary" className="text-xs max-w-[200px] truncate hidden md:flex" data-testid="badge-media-name">
+            {mediaName}
+          </Badge>
+        )}
+
+        {/* REC badge */}
+        {isRecording && (
+          <Badge className="bg-destructive text-destructive-foreground animate-pulse gap-1 flex-shrink-0">
+            <Circle className="w-2 h-2 fill-current" /> REC
+          </Badge>
+        )}
+
+        <div className="flex items-center gap-1 ml-auto">
+          {/* Toggle modo oscuro/claro */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost" size="icon"
+                onClick={() => setIsDark(!isDark)}
+                className="h-8 w-8"
+                data-testid="button-toggle-theme"
+              >
+                {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{isDark ? "Modo claro" : "Modo oscuro"}</TooltipContent>
+          </Tooltip>
+
+          {/* Toggle panel izquierdo */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost" size="icon"
+                onClick={() => setShowLeftPanel(!showLeftPanel)}
+                className="h-8 w-8"
+                data-testid="button-toggle-left"
+              >
+                {showLeftPanel ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{showLeftPanel ? "Ocultar biblioteca" : "Mostrar biblioteca"}</TooltipContent>
+          </Tooltip>
+
+          {/* Toggle panel derecho */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost" size="icon"
+                onClick={() => setShowRightPanel(!showRightPanel)}
+                className="h-8 w-8"
+                data-testid="button-toggle-right"
+              >
+                {showRightPanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{showRightPanel ? "Ocultar controles" : "Mostrar controles"}</TooltipContent>
+          </Tooltip>
+        </div>
+      </header>
+
+      {/* ============================================================
+       * CUERPO PRINCIPAL: [Left] [Center] [Right]
+       * ============================================================ */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ─────────────────────────────────────────────────────────
+         * PANEL IZQUIERDO — Lista de videos estilo YouTube
+         * ───────────────────────────────────────────────────────── */}
+        {showLeftPanel && (
+          <aside className="w-64 border-r border-border bg-sidebar flex flex-col overflow-hidden flex-shrink-0">
+            {/* Filtro de tipo */}
+            <div className="flex border-b border-border px-2 py-1.5 gap-1">
+              {(["all", "video", "audio"] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => { setVideoListFilter(f); setQueuePage(0); }}
+                  data-testid={`filter-${f}`}
+                  className={`flex-1 text-[11px] py-1 rounded transition-colors font-medium ${
+                    videoListFilter === f
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                  }`}
+                >
+                  {f === "all" ? "Todo" : f === "video" ? "Video" : "Audio"}
+                </button>
+              ))}
+            </div>
+
+            {/* Lista de videos */}
+            <div className="flex-1 overflow-y-auto no-scrollbar">
+              <div className="p-2 space-y-0.5">
+                {filteredVideos.map(item => (
+                  <VideoListItem
+                    key={item.id}
+                    item={item}
+                    isActive={activeVideoId === item.id}
+                    onClick={() => selectVideoItem(item)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Total */}
+            <div className="px-3 py-2 border-t border-border">
+              <p className="text-[10px] text-muted-foreground text-center">
+                {filteredVideos.length} {filteredVideos.length === 1 ? "archivo" : "archivos"}
+              </p>
+            </div>
+          </aside>
+        )}
+
+        {/* ─────────────────────────────────────────────────────────
+         * CENTRO — Reproductor de video + controles + cola
+         * ───────────────────────────────────────────────────────── */}
+        <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+
+          {/* Área de video */}
+          <div
+            ref={playerContainerRef}
+            className="relative bg-black flex items-center justify-center player-glow"
+            style={{ flex: "1 1 0", minHeight: 0 }}
+          >
+            {mediaType === "embed" && embedUrl ? (
+              <iframe
+                src={embedUrl}
+                className="w-full h-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                title="Video embebido"
+                data-testid="iframe-embed"
+              />
+            ) : mediaSource && mediaType === "video" ? (
+              <video
+                ref={videoRef}
+                src={mediaSource}
+                className="max-w-full max-h-full"
+                onClick={togglePlay}
+                data-testid="video-player"
+              />
+            ) : mediaSource && mediaType === "audio" ? (
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-36 h-36 rounded-full bg-gradient-to-br from-primary/30 to-purple-500/30 flex items-center justify-center border border-primary/20 shadow-2xl">
+                  <Music className="w-16 h-16 text-primary/60" />
+                </div>
+                <p className="text-muted-foreground text-sm font-medium">{mediaName}</p>
+                <audio ref={videoRef as unknown as React.RefObject<HTMLAudioElement>} src={mediaSource} data-testid="audio-player" />
+              </div>
+            ) : activeVideoId ? (
+              /* Video seleccionado de la lista (sin URL real en demo) */
+              <div className="flex flex-col items-center gap-5 text-center px-8">
+                {(() => {
+                  const item = DEMO_VIDEOS.find(v => v.id === activeVideoId);
+                  if (!item) return null;
+                  return (
+                    <>
+                      <div className={`w-32 h-20 rounded-xl bg-gradient-to-br ${item.color} flex items-center justify-center shadow-2xl`}>
+                        {item.type === "audio" ? <Music className="w-10 h-10 text-white/50" /> : <Video className="w-10 h-10 text-white/40" />}
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-semibold text-foreground">{item.name}</h3>
+                        <p className="text-sm text-muted-foreground">{item.folder} · {item.duration}</p>
+                        <p className="text-xs text-muted-foreground/60 mt-1 font-mono">{item.path}</p>
+                      </div>
+                      <p className="text-xs text-muted-foreground/50">
+                        Conecta el servidor Python local para reproducir archivos reales
+                      </p>
+                    </>
+                  );
+                })()}
+              </div>
+            ) : (
+              /* Pantalla de bienvenida */
+              <div className="flex flex-col items-center gap-5 text-center px-8">
+                <div className="relative">
+                  <div className="w-20 h-20 rounded-2xl bg-primary/10 flex items-center justify-center border border-primary/20">
+                    <Radio className="w-10 h-10 text-primary/50" />
+                  </div>
+                  <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-primary/20 animate-ping" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-foreground mb-1">Rocio</h2>
+                  <p className="text-muted-foreground text-sm max-w-xs">
+                    Selecciona un archivo del panel izquierdo, carga uno desde tu disco, o pega una URL.
+                  </p>
+                </div>
+                <div className="flex gap-2 flex-wrap justify-center">
+                  <Button variant="outline" size="sm" onClick={() => { setShowLeftPanel(true); }} data-testid="button-open-library">
+                    <LayoutGrid className="w-4 h-4 mr-1.5" /> Biblioteca
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => { setShowRightPanel(true); setRightTab("url"); }} data-testid="button-open-url">
+                    <Link2 className="w-4 h-4 mr-1.5" /> URL
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── BARRA DE CONTROLES ── */}
+          <div className="bg-card/80 backdrop-blur-md border-t border-border px-4 py-2.5 space-y-2">
+            {/* Barra de progreso */}
+            {mediaType !== "embed" && (
+              <div className="space-y-0.5">
+                <Slider
+                  min={0} max={duration || 100} step={0.1}
+                  value={[currentTime]}
+                  onValueChange={handleSeek}
+                  disabled={!mediaSource && !activeVideoId}
+                  data-testid="slider-progress"
+                />
+                {isSegmentMode && duration > 0 && (
+                  <div className="relative h-1">
+                    <div
+                      className="absolute h-1 bg-primary/40 rounded"
+                      style={{
+                        left: `${(segmentStart / duration) * 100}%`,
+                        width: `${((segmentEnd - segmentStart) / duration) * 100}%`,
+                      }}
+                    />
+                  </div>
+                )}
+                <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
+                  <span data-testid="text-current-time">{formatTime(currentTime)}</span>
+                  <span data-testid="text-duration">{formatTime(duration)}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Controles */}
+            <div className="flex items-center justify-between gap-2">
+              {/* Izquierda: controles de reproducción */}
+              <div className="flex items-center gap-0.5">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon" onClick={() => skip(-10)} disabled={mediaType === "embed"} className="h-8 w-8" data-testid="button-skip-back">
+                      <SkipBack className="w-3.5 h-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>-10s</TooltipContent>
+                </Tooltip>
+
+                <Button variant="default" size="icon" onClick={togglePlay} disabled={mediaType === "embed" && !mediaSource} className="h-9 w-9 rounded-full" data-testid="button-play-pause">
+                  {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                </Button>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon" onClick={() => skip(10)} disabled={mediaType === "embed"} className="h-8 w-8" data-testid="button-skip-forward">
+                      <SkipForward className="w-3.5 h-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>+10s</TooltipContent>
+                </Tooltip>
+
+                <Button variant="ghost" size="icon" onClick={() => { if (videoRef.current) videoRef.current.currentTime = 0; }} disabled={mediaType === "embed"} className="h-8 w-8" data-testid="button-restart">
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+
+              {/* Centro: velocidades */}
+              <div className="flex items-center gap-0.5 hidden sm:flex">
+                {[0.5, 1, 1.5, 2].map(rate => (
+                  <button
+                    key={rate}
+                    onClick={() => handleRate(rate)}
+                    data-testid={`button-rate-${rate}`}
+                    className={`px-1.5 py-0.5 rounded text-[11px] font-mono transition-colors ${
+                      playbackRate === rate
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    {rate}x
+                  </button>
+                ))}
+              </div>
+
+              {/* Derecha: volumen + cola + pantalla completa */}
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" onClick={toggleMute} disabled={mediaType === "embed"} className="h-8 w-8" data-testid="button-mute">
+                  {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                </Button>
+                <Slider
+                  min={0} max={1} step={0.01}
+                  value={[isMuted ? 0 : volume]}
+                  onValueChange={handleVolume}
+                  disabled={mediaType === "embed"}
+                  className="w-16 hidden sm:block"
+                  data-testid="slider-volume"
+                />
+
+                {/* Toggle cola de reproducción */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={showQueue ? "secondary" : "ghost"}
+                      size="icon"
+                      onClick={() => setShowQueue(!showQueue)}
+                      className="h-8 w-8"
+                      data-testid="button-toggle-queue"
+                    >
+                      <List className="w-3.5 h-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{showQueue ? "Ocultar cola" : "Mostrar cola"}</TooltipContent>
+                </Tooltip>
+
+                <Button variant="ghost" size="icon" onClick={toggleFullscreen} disabled={mediaType === "embed"} className="h-8 w-8" data-testid="button-fullscreen">
+                  {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* ── COLA DE REPRODUCCIÓN — panel desplegable ── */}
+          {showQueue && (
+            <div className="border-t border-border bg-card/50 backdrop-blur-sm">
+              {/* Encabezado de la cola */}
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border/50">
+                <div className="flex items-center gap-2">
+                  <List className="w-4 h-4 text-primary" />
+                  <span className="text-sm font-medium">Cola de reproducción</span>
+                  <Badge variant="secondary" className="text-[10px]">
+                    {filteredVideos.length} archivos
+                  </Badge>
+                </div>
+                {/* Paginación */}
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground hidden sm:block">
+                    Pág. {queuePage + 1}/{totalPages}
+                  </span>
+                  <Button
+                    variant="ghost" size="icon"
+                    onClick={() => setQueuePage(p => Math.max(0, p - 1))}
+                    disabled={queuePage === 0}
+                    className="h-7 w-7"
+                    data-testid="button-queue-prev"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost" size="icon"
+                    onClick={() => setQueuePage(p => Math.min(totalPages - 1, p + 1))}
+                    disabled={queuePage >= totalPages - 1}
+                    className="h-7 w-7"
+                    data-testid="button-queue-next"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => setShowQueue(false)} className="h-7 w-7">
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Cuadrícula de vistas previas */}
+              <div className="p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 overflow-y-auto max-h-64">
+                {queuePageItems.map(item => (
+                  <VideoQueueCard
+                    key={item.id}
+                    item={item}
+                    isActive={activeVideoId === item.id}
+                    onClick={() => selectVideoItem(item)}
+                  />
+                ))}
+              </div>
+
+              {/* Indicadores de página */}
+              <div className="flex justify-center gap-1 pb-2">
+                {Array.from({ length: totalPages }).map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setQueuePage(i)}
+                    data-testid={`queue-page-${i}`}
+                    className={`rounded-full transition-all ${
+                      i === queuePage
+                        ? "w-4 h-1.5 bg-primary"
+                        : "w-1.5 h-1.5 bg-border hover:bg-muted-foreground"
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </main>
+
+        {/* ─────────────────────────────────────────────────────────
+         * PANEL DERECHO — Controles (ocultable)
+         * ───────────────────────────────────────────────────────── */}
+        {showRightPanel && (
+          <aside className="w-72 border-l border-border bg-sidebar flex flex-col overflow-hidden flex-shrink-0">
+
+            {/* Pestañas del panel derecho */}
+            <div className="flex border-b border-border overflow-x-auto no-scrollbar">
+              {([
+                { key: "library", label: "Dirs" },
+                { key: "url", label: "URL" },
+                { key: "segment", label: "Segmento" },
+                { key: "share", label: "Compartir" },
+              ] as const).map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setRightTab(key)}
+                  data-testid={`tab-${key}`}
+                  className={`flex-1 py-2 text-[11px] font-medium transition-colors border-b-2 whitespace-nowrap ${
+                    rightTab === key
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 overflow-y-auto no-scrollbar">
+              <div className="p-3 space-y-3">
+
+                {/* ─────────────────────────────────────────────
+                 * SECCIÓN: DIRECTORIOS
+                 * ───────────────────────────────────────────── */}
+                {rightTab === "library" && (
+                  <div className="space-y-3">
+                    {/* Sub-pestañas: Disco / Favoritos */}
+                    <div className="flex rounded-lg border border-border overflow-hidden">
+                      <button
+                        onClick={() => setLibraryTab("disk")}
+                        data-testid="tab-disk"
+                        className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-medium transition-colors ${
+                          libraryTab === "disk"
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground bg-transparent"
+                        }`}
+                      >
+                        <HardDrive className="w-3 h-3" /> Disco
+                      </button>
+                      <button
+                        onClick={() => setLibraryTab("favorites")}
+                        data-testid="tab-favorites"
+                        className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-medium transition-colors ${
+                          libraryTab === "favorites"
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground bg-transparent"
+                        }`}
+                      >
+                        <Star className="w-3 h-3" /> Favoritos
+                        {favorites.length > 0 && (
+                          <span className="ml-0.5 bg-primary/20 text-primary text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
+                            {favorites.length}
+                          </span>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* ÁRBOL DE DISCO */}
+                    {libraryTab === "disk" && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <HardDrive className="w-3.5 h-3.5 text-primary" />
+                          <span className="text-xs font-medium">Raíz del disco</span>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          Marca las carpetas o archivos. Haz clic en ★ en una carpeta para añadirla a Favoritos.
+                        </p>
+                        <div className="rounded-lg border border-border bg-card/40 overflow-hidden py-1">
+                          {diskTree.map(node => (
+                            <FileTreeNode
+                              key={node.id}
+                              node={node}
+                              onToggleCheck={toggleNodeCheck}
+                              onToggleOpen={toggleNodeOpen}
+                              onSelectFile={handleSelectFromTree}
+                              onAddFavorite={addToFavorites}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* FAVORITOS */}
+                    {libraryTab === "favorites" && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <Star className="w-3.5 h-3.5 text-yellow-400" />
+                          <span className="text-xs font-medium">Carpetas Favoritas</span>
+                        </div>
+                        {favorites.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-border p-6 text-center">
+                            <Star className="w-8 h-8 text-muted-foreground/30 mx-auto mb-2" />
+                            <p className="text-xs text-muted-foreground">
+                              Haz clic en ★ en cualquier carpeta del árbol de disco para añadirla aquí.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {favorites.map(fav => (
+                              <div key={fav.id} className="flex items-center gap-2 p-2 rounded-lg bg-card border border-border group">
+                                <FolderOpen className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-medium truncate">{fav.name}</p>
+                                  <p className="text-[10px] text-muted-foreground truncate font-mono">{fav.path}</p>
+                                </div>
+                                <button
+                                  onClick={() => removeFromFavorites(fav.id)}
+                                  className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive flex-shrink-0"
+                                  title="Quitar de Favoritos"
+                                  data-testid={`remove-fav-${fav.id}`}
+                                >
+                                  <StarOff className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* CARGAR ARCHIVO INDIVIDUAL */}
+                    <Separator />
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                        <Upload className="w-3 h-3" /> Cargar archivo individual
+                      </Label>
+                      <label
+                        htmlFor="file-upload"
+                        className="flex items-center justify-center gap-2 border-2 border-dashed border-border rounded-lg py-3 px-2 cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
+                        data-testid="label-file-upload"
+                      >
+                        <Upload className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-xs text-muted-foreground">Seleccionar archivo</span>
+                        <input
+                          id="file-upload"
+                          type="file"
+                          accept="video/*,audio/*"
+                          className="hidden"
+                          onChange={handleFileUpload}
+                          data-testid="input-file-upload"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {/* ─────────────────────────────────────────────
+                 * SECCIÓN: URL EXTERNA
+                 * ───────────────────────────────────────────── */}
+                {rightTab === "url" && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Link2 className="w-4 h-4 text-primary" />
+                      <span className="text-sm font-medium">URL Externa</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Pega una URL de YouTube, Vimeo o un enlace directo a video/audio.
+                    </p>
+                    <div className="space-y-2">
+                      <Input
+                        placeholder="https://youtube.com/watch?v=..."
+                        value={externalUrl}
+                        onChange={(e) => setExternalUrl(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleLoadExternalUrl()}
+                        className="text-sm bg-card border-border"
+                        data-testid="input-external-url"
+                      />
+                      <Button onClick={handleLoadExternalUrl} className="w-full" size="sm" data-testid="button-load-url">
+                        <ExternalLink className="w-3.5 h-3.5 mr-2" /> Cargar URL
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {["YouTube", "Vimeo", "MP4", "MP3", "WebM"].map(p => (
+                        <Badge key={p} variant="outline" className="text-[10px]">{p}</Badge>
+                      ))}
+                    </div>
+                    {urlType && (
+                      <div className={`rounded-md px-3 py-2 text-xs ${
+                        urlType === "unknown"
+                          ? "bg-destructive/10 text-destructive border border-destructive/20"
+                          : "bg-primary/10 text-primary border border-primary/20"
+                      }`}>
+                        Detectado: <span className="font-semibold capitalize">{urlType}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ─────────────────────────────────────────────
+                 * SECCIÓN: SEGMENTO
+                 * ───────────────────────────────────────────── */}
+                {rightTab === "segment" && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Scissors className="w-4 h-4 text-primary" />
+                      <span className="text-sm font-medium">Grabación por Segmento</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Marca inicio y fin mientras el video reproduce, luego grábalo.
+                    </p>
+
+                    {/* Modo bucle */}
+                    <div className="flex items-center gap-2 p-2 rounded-lg bg-card border border-border">
+                      <Checkbox
+                        id="segment-mode"
+                        checked={isSegmentMode}
+                        onCheckedChange={(v) => setIsSegmentMode(!!v)}
+                        data-testid="checkbox-segment-mode"
+                      />
+                      <Label htmlFor="segment-mode" className="text-xs cursor-pointer">Modo bucle del segmento</Label>
+                    </div>
+
+                    {/* Info del segmento */}
+                    <div className="segment-highlight rounded-lg p-3 space-y-1.5">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Inicio:</span>
+                        <span className="font-mono text-primary font-semibold" data-testid="text-segment-start">{formatTime(segmentStart)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Fin:</span>
+                        <span className="font-mono text-primary font-semibold" data-testid="text-segment-end">{formatTime(segmentEnd)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Duración:</span>
+                        <span className="font-mono text-muted-foreground">{formatTime(Math.max(0, segmentEnd - segmentStart))}</span>
+                      </div>
+                    </div>
+
+                    {/* Botones de marcado */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button variant="outline" size="sm" onClick={markSegmentStart} className="gap-1 text-xs" data-testid="button-mark-start">
+                        <Clock className="w-3 h-3 text-green-400" /> Marcar Inicio
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={markSegmentEnd} className="gap-1 text-xs" data-testid="button-mark-end">
+                        <Clock className="w-3 h-3 text-red-400" /> Marcar Fin
+                      </Button>
+                    </div>
+
+                    <Separator />
+                    {!isRecording ? (
+                      <Button
+                        onClick={startSegmentRecording}
+                        className="w-full gap-2" size="sm"
+                        disabled={segmentEnd <= segmentStart}
+                        data-testid="button-start-recording"
+                      >
+                        <Circle className="w-3 h-3 fill-destructive text-destructive" /> Grabar Segmento
+                      </Button>
+                    ) : (
+                      <Button
+                        onClick={stopSegmentRecording}
+                        variant="destructive"
+                        className="w-full gap-2 animate-pulse" size="sm"
+                        data-testid="button-stop-recording"
+                      >
+                        <Square className="w-3 h-3" /> Detener Grabación
+                      </Button>
+                    )}
+                    <p className="text-[10px] text-muted-foreground text-center">El segmento se descargará en formato WebM</p>
+                  </div>
+                )}
+
+                {/* ─────────────────────────────────────────────
+                 * SECCIÓN: COMPARTIR
+                 * ───────────────────────────────────────────── */}
+                {rightTab === "share" && (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center gap-2">
+                      <Share2 className="w-4 h-4 text-primary" />
+                      <span className="text-sm font-medium">Compartir</span>
+                    </div>
+
+                    <button onClick={() => openShare(socialLinks.whatsapp, "WhatsApp")} className="social-btn w-full flex items-center gap-3 p-3 rounded-lg bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/20 transition-all" data-testid="button-share-whatsapp">
+                      <SiWhatsapp className="w-5 h-5 text-[#25D366]" />
+                      <div className="text-left">
+                        <p className="text-sm font-medium">WhatsApp</p>
+                        <p className="text-[10px] text-muted-foreground">Compartir enlace</p>
+                      </div>
+                    </button>
+
+                    <button onClick={() => openShare(socialLinks.telegram, "Telegram")} className="social-btn w-full flex items-center gap-3 p-3 rounded-lg bg-[#2CA5E0]/10 hover:bg-[#2CA5E0]/20 border border-[#2CA5E0]/20 transition-all" data-testid="button-share-telegram">
+                      <SiTelegram className="w-5 h-5 text-[#2CA5E0]" />
+                      <div className="text-left">
+                        <p className="text-sm font-medium">Telegram</p>
+                        <p className="text-[10px] text-muted-foreground">Compartir enlace</p>
+                      </div>
+                    </button>
+
+                    <button onClick={() => openShare(socialLinks.facebook, "Facebook")} className="social-btn w-full flex items-center gap-3 p-3 rounded-lg bg-[#1877F2]/10 hover:bg-[#1877F2]/20 border border-[#1877F2]/20 transition-all" data-testid="button-share-facebook">
+                      <SiFacebook className="w-5 h-5 text-[#1877F2]" />
+                      <div className="text-left">
+                        <p className="text-sm font-medium">Facebook</p>
+                        <p className="text-[10px] text-muted-foreground">Compartir en muro</p>
+                      </div>
+                    </button>
+
+                    <button onClick={() => openShare(socialLinks.instagram, "Instagram")} className="social-btn w-full flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-[#E1306C]/10 to-[#F77737]/10 hover:from-[#E1306C]/20 hover:to-[#F77737]/20 border border-[#E1306C]/20 transition-all" data-testid="button-share-instagram">
+                      <SiInstagram className="w-5 h-5 text-[#E1306C]" />
+                      <div className="text-left">
+                        <p className="text-sm font-medium">Instagram</p>
+                        <p className="text-[10px] text-muted-foreground">Copiar enlace</p>
+                      </div>
+                    </button>
+
+                    <Separator />
+                    <Button
+                      variant="outline" size="sm" className="w-full gap-2"
+                      onClick={() => { navigator.clipboard.writeText(window.location.href); toast({ title: "Enlace copiado" }); }}
+                      data-testid="button-copy-link"
+                    >
+                      <Link2 className="w-4 h-4" /> Copiar enlace
+                    </Button>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          </aside>
+        )}
+      </div>
+    </div>
+  );
+}
