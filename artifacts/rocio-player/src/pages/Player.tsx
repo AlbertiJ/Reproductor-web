@@ -581,7 +581,7 @@ export default function Player() {
   const [favoriteVideoIds, setFavoriteVideoIds] = useState<Set<string>>(new Set());
 
   /* ── Pestaña activa del panel derecho ── */
-  const [rightTab, setRightTab] = useState<"library" | "url">("library");
+  const [rightTab, setRightTab] = useState<"library" | "url" | "edit">("library");
 
   /* ── Pestaña del explorador de directorios ── */
   const [libraryTab, setLibraryTab] = useState<"disk" | "favorites">("disk");
@@ -595,6 +595,10 @@ export default function Player() {
 
   /* ── Lista de reproducción personalizada ── */
   const [playlistItems, setPlaylistItems] = useState<VideoItem[]>([]);
+
+  /* ── Modo selección de favoritos para agregar a playlist ── */
+  const [playlistSelectMode, setPlaylistSelectMode] = useState(false);
+  const [playlistSelected, setPlaylistSelected] = useState<Set<string>>(new Set());
 
   /* ── Grabación ── */
   const [segmentStart, setSegmentStart] = useState(0);
@@ -1377,7 +1381,50 @@ export default function Player() {
               {favoriteVideoIds.size > 0 && (
                 <span className="text-[9px] bg-yellow-400/20 text-yellow-400 rounded-full px-1.5 font-bold">{favoriteVideoIds.size}</span>
               )}
+              {/* Botón para activar modo selección */}
+              {favoriteVideos.length > 0 && (
+                <button
+                  onClick={() => {
+                    setPlaylistSelectMode(v => !v);
+                    setPlaylistSelected(new Set());
+                  }}
+                  className={`text-[9px] border rounded px-1.5 py-0.5 transition-colors ml-1 ${
+                    playlistSelectMode
+                      ? "bg-primary/20 text-primary border-primary/40"
+                      : "text-muted-foreground border-border hover:text-foreground hover:border-border/80"
+                  }`}
+                  title={playlistSelectMode ? "Cancelar selección" : "Elegir favoritos para playlist"}
+                >
+                  {playlistSelectMode ? "Cancelar" : "Elegir"}
+                </button>
+              )}
             </div>
+
+            {/* Banner de selección activa */}
+            {playlistSelectMode && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/10 border-b border-primary/20 flex-shrink-0">
+                <span className="text-[10px] text-primary flex-1">
+                  {playlistSelected.size === 0
+                    ? "Marcá los archivos a agregar"
+                    : `${playlistSelected.size} seleccionado${playlistSelected.size > 1 ? "s" : ""}`
+                  }
+                </span>
+                {playlistSelected.size > 0 && (
+                  <button
+                    onClick={() => {
+                      const toAdd = favoriteVideos
+                        .filter(v => playlistSelected.has(v.id) && !playlistItems.find(p => p.id === v.id));
+                      setPlaylistItems(prev => [...prev, ...toAdd]);
+                      setPlaylistSelectMode(false);
+                      setPlaylistSelected(new Set());
+                    }}
+                    className="text-[9px] bg-primary text-primary-foreground rounded px-2 py-0.5 font-semibold hover:bg-primary/80 transition-colors"
+                  >
+                    + Agregar ({playlistSelected.size})
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="flex-shrink-0 overflow-y-auto border-b border-border" style={{ maxHeight: "33%" }}>
               {favoriteVideos.length === 0 ? (
@@ -1390,30 +1437,80 @@ export default function Player() {
                     <div key={folder}>
                       <div className="flex items-center gap-1 px-2 py-1 sticky top-0 bg-sidebar/90 z-10 border-b border-border/20">
                         <Folder className="w-3 h-3 text-yellow-400/60 flex-shrink-0" />
-                        <span className="text-[10px] text-muted-foreground font-medium truncate">{folder}</span>
+                        <span className="text-[10px] text-muted-foreground font-medium truncate flex-1">{folder}</span>
+                        {/* Seleccionar toda la carpeta en modo selección */}
+                        {playlistSelectMode && (
+                          <button
+                            onClick={() => {
+                              const allIds = files.map(f => f.id);
+                              const allSelected = allIds.every(id => playlistSelected.has(id));
+                              setPlaylistSelected(prev => {
+                                const next = new Set(prev);
+                                allIds.forEach(id => allSelected ? next.delete(id) : next.add(id));
+                                return next;
+                              });
+                            }}
+                            className="text-[9px] text-primary/70 hover:text-primary transition-colors"
+                          >
+                            {files.every(f => playlistSelected.has(f.id)) ? "✓ todos" : "todos"}
+                          </button>
+                        )}
                       </div>
                       {files.map(item => (
                         <div
                           key={item.id}
-                          className={`flex items-center gap-1.5 px-2 py-1 group/fav cursor-pointer hover:bg-secondary/30 transition-colors ${activeVideoId === item.id ? "bg-primary/10" : ""}`}
+                          className={`flex items-center gap-1.5 px-2 py-1 group/fav cursor-pointer hover:bg-secondary/30 transition-colors ${
+                            activeVideoId === item.id && !playlistSelectMode ? "bg-primary/10" : ""
+                          } ${playlistSelectMode && playlistSelected.has(item.id) ? "bg-primary/8" : ""}`}
+                          onClick={() => {
+                            if (playlistSelectMode) {
+                              setPlaylistSelected(prev => {
+                                const next = new Set(prev);
+                                next.has(item.id) ? next.delete(item.id) : next.add(item.id);
+                                return next;
+                              });
+                            } else {
+                              selectVideoItem(item);
+                            }
+                          }}
                         >
-                          <button onClick={() => selectVideoItem(item)} className="flex items-center gap-1.5 flex-1 min-w-0">
+                          {/* Checkbox en modo selección */}
+                          {playlistSelectMode ? (
+                            <Checkbox
+                              checked={playlistSelected.has(item.id)}
+                              onCheckedChange={() => {
+                                setPlaylistSelected(prev => {
+                                  const next = new Set(prev);
+                                  next.has(item.id) ? next.delete(item.id) : next.add(item.id);
+                                  return next;
+                                });
+                              }}
+                              className="w-3.5 h-3.5 flex-shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : null}
+                          <div className="flex items-center gap-1.5 flex-1 min-w-0">
                             {item.type === "video"
                               ? <Video className="w-3 h-3 text-cyan-400 flex-shrink-0" />
                               : <Music className="w-3 h-3 text-purple-400 flex-shrink-0" />
                             }
-                            <span className={`text-[11px] truncate ${activeVideoId === item.id ? "text-primary font-medium" : "text-foreground/75"}`}>{item.name}</span>
-                          </button>
-                          <button
-                            onClick={() => { if (!playlistItems.find(p => p.id === item.id)) setPlaylistItems(prev => [...prev, item]); }}
-                            className="opacity-0 group-hover/fav:opacity-100 flex-shrink-0 text-muted-foreground hover:text-primary transition-opacity"
-                            title="Agregar a playlist"
-                          ><List className="w-3 h-3" /></button>
-                          <button
-                            onClick={() => toggleVideoFavorite(item.id)}
-                            className="opacity-0 group-hover/fav:opacity-100 flex-shrink-0 text-yellow-400 hover:text-red-400 transition-opacity"
-                            title="Quitar de favoritos"
-                          ><StarOff className="w-3 h-3" /></button>
+                            <span className={`text-[11px] truncate ${activeVideoId === item.id && !playlistSelectMode ? "text-primary font-medium" : "text-foreground/75"}`}>{item.name}</span>
+                          </div>
+                          {/* Botones de acción (solo en modo normal) */}
+                          {!playlistSelectMode && (
+                            <>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); if (!playlistItems.find(p => p.id === item.id)) setPlaylistItems(prev => [...prev, item]); }}
+                                className="opacity-0 group-hover/fav:opacity-100 flex-shrink-0 text-muted-foreground hover:text-primary transition-opacity"
+                                title="Agregar a playlist"
+                              ><List className="w-3 h-3" /></button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); toggleVideoFavorite(item.id); }}
+                                className="opacity-0 group-hover/fav:opacity-100 flex-shrink-0 text-yellow-400 hover:text-red-400 transition-opacity"
+                                title="Quitar de favoritos"
+                              ><StarOff className="w-3 h-3" /></button>
+                            </>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1431,21 +1528,9 @@ export default function Player() {
             <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border flex-shrink-0 bg-sidebar/80">
               <List className="w-3 h-3 text-primary flex-shrink-0" />
               <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase flex-1">Playlist</span>
-              <div className="flex items-center gap-1">
-                {playlistItems.length > 0 && (
-                  <span className="text-[9px] bg-primary/20 text-primary rounded-full px-1.5 font-bold">{playlistItems.length}</span>
-                )}
-                {favoriteVideos.length > 0 && (
-                  <button
-                    onClick={() => {
-                      const toAdd = favoriteVideos.filter(v => !playlistItems.find(p => p.id === v.id));
-                      if (toAdd.length) setPlaylistItems(prev => [...prev, ...toAdd]);
-                    }}
-                    className="text-[9px] text-primary hover:text-primary/80 border border-primary/30 rounded px-1 py-0.5 transition-colors"
-                    title="Agregar todos los favoritos a la playlist"
-                  >+ todos</button>
-                )}
-              </div>
+              {playlistItems.length > 0 && (
+                <span className="text-[9px] bg-primary/20 text-primary rounded-full px-1.5 font-bold">{playlistItems.length}</span>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto no-scrollbar">
@@ -1453,7 +1538,7 @@ export default function Player() {
                 <div className="flex flex-col items-center justify-center h-full gap-2 px-4 text-center">
                   <List className="w-8 h-8 text-muted-foreground/20" />
                   <p className="text-[10px] text-muted-foreground leading-relaxed">
-                    Usá el botón <span className="text-primary">≡</span> en cada archivo favorito para armarte tu playlist.
+                    Usá <span className="text-primary font-semibold">Elegir</span> en Favoritos para seleccionar archivos, o el botón <span className="text-primary">≡</span> en cada archivo.
                   </p>
                 </div>
               ) : (
@@ -1797,6 +1882,7 @@ export default function Player() {
               {([
                 { key: "library", label: "Directorio" },
                 { key: "url", label: "URL" },
+                { key: "edit", label: "Edición" },
               ] as const).map(({ key, label }) => (
                 <button
                   key={key}
@@ -1996,6 +2082,191 @@ export default function Player() {
                   </div>
                 )}
 
+                {/* ─────────────────────────────────────────────
+                 * SECCIÓN: EDICIÓN — Marcación A/B + Grabación
+                 * ───────────────────────────────────────────── */}
+                {rightTab === "edit" && (
+                  <div className="space-y-3">
+
+                    {/* Encabezado */}
+                    <div className="flex items-center gap-2">
+                      <Scissors className="w-4 h-4 text-primary" />
+                      <span className="text-sm font-medium">Edición de Segmento</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Marcá el <span className="text-green-400 font-semibold">Punto A</span> y el <span className="text-red-400 font-semibold">Punto B</span> mientras el archivo reproduce, luego descargá ese fragmento.
+                    </p>
+
+                    {/* Activar modo segmento */}
+                    <div
+                      className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors select-none ${
+                        isSegmentMode
+                          ? "bg-primary/10 border-primary/40"
+                          : "bg-card border-border hover:border-primary/30"
+                      }`}
+                      onClick={() => setIsSegmentMode(v => !v)}
+                    >
+                      <Checkbox
+                        id="seg-mode-right"
+                        checked={isSegmentMode}
+                        onCheckedChange={(v) => setIsSegmentMode(!!v)}
+                        data-testid="checkbox-segment-mode"
+                      />
+                      <Label htmlFor="seg-mode-right" className="text-xs cursor-pointer flex-1">
+                        Activar modo segmento
+                      </Label>
+                      {isSegmentMode && (
+                        <span className="text-[9px] text-primary font-semibold bg-primary/20 rounded px-1">ACTIVO</span>
+                      )}
+                    </div>
+
+                    {/* Línea de tiempo visual A → B */}
+                    <div className="rounded-lg border border-border bg-card overflow-hidden">
+                      <div className="px-3 py-2 border-b border-border/50 flex items-center gap-1.5">
+                        <Clock className="w-3 h-3 text-muted-foreground" />
+                        <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Línea de tiempo</span>
+                      </div>
+
+                      {/* Barra visual del segmento */}
+                      <div className="px-3 py-2">
+                        <div className="relative h-2 bg-secondary rounded-full overflow-hidden">
+                          {duration > 0 && (
+                            <div
+                              className="absolute h-full bg-primary/50 rounded-full"
+                              style={{
+                                left: `${(segmentStart / duration) * 100}%`,
+                                width: `${Math.max(0, (segmentEnd - segmentStart) / duration) * 100}%`,
+                              }}
+                            />
+                          )}
+                          {duration > 0 && (
+                            <div
+                              className="absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-green-400 shadow"
+                              style={{ left: `calc(${(segmentStart / duration) * 100}% - 3px)` }}
+                            />
+                          )}
+                          {duration > 0 && segmentEnd > segmentStart && (
+                            <div
+                              className="absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-red-400 shadow"
+                              style={{ left: `calc(${(segmentEnd / duration) * 100}% - 3px)` }}
+                            />
+                          )}
+                        </div>
+
+                        {/* Tiempos */}
+                        <div className="mt-2.5 grid grid-cols-2 gap-2 text-[11px]">
+                          <div className="space-y-0.5">
+                            <span className="text-muted-foreground block text-[10px]">Punto A (inicio)</span>
+                            <span className="font-mono text-green-400 font-semibold text-sm" data-testid="text-segment-start">
+                              {formatTime(segmentStart)}
+                            </span>
+                          </div>
+                          <div className="space-y-0.5 text-right">
+                            <span className="text-muted-foreground block text-[10px]">Punto B (fin)</span>
+                            <span className="font-mono text-red-400 font-semibold text-sm" data-testid="text-segment-end">
+                              {segmentEnd > segmentStart ? formatTime(segmentEnd) : "—"}
+                            </span>
+                          </div>
+                        </div>
+
+                        {segmentEnd > segmentStart && (
+                          <div className="mt-1.5 flex justify-center">
+                            <span className="text-[10px] text-muted-foreground">
+                              Duración del segmento: <span className="font-mono text-foreground">{formatTime(segmentEnd - segmentStart)}</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Botones Marcar A / Marcar B */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={markSegmentStart}
+                        disabled={!isSegmentMode}
+                        className="gap-1.5 text-xs border-green-500/40 text-green-400 hover:bg-green-500/10 hover:text-green-300 disabled:opacity-40"
+                        data-testid="button-mark-start"
+                      >
+                        <Clock className="w-3 h-3" />
+                        Marcar A
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={markSegmentEnd}
+                        disabled={!isSegmentMode}
+                        className="gap-1.5 text-xs border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40"
+                        data-testid="button-mark-end"
+                      >
+                        <Clock className="w-3 h-3" />
+                        Marcar B
+                      </Button>
+                    </div>
+
+                    {/* Modo bucle */}
+                    <div
+                      className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                        isSegmentMode && segmentEnd > segmentStart
+                          ? "border-border/50 bg-card/50"
+                          : "border-border/20 bg-transparent opacity-40 pointer-events-none"
+                      }`}
+                    >
+                      <Checkbox
+                        id="seg-loop-right"
+                        checked={isSegmentMode}
+                        onCheckedChange={(v) => setIsSegmentMode(!!v)}
+                      />
+                      <Label htmlFor="seg-loop-right" className="text-[11px] cursor-pointer text-muted-foreground">
+                        Repetir segmento en bucle
+                      </Label>
+                    </div>
+
+                    <Separator />
+
+                    {/* Botón Grabar / Detener */}
+                    {!isRecording ? (
+                      <Button
+                        onClick={startSegmentRecording}
+                        className="w-full gap-2"
+                        size="sm"
+                        disabled={segmentEnd <= segmentStart || !isSegmentMode}
+                        data-testid="button-start-recording"
+                      >
+                        <Circle className="w-3 h-3 fill-destructive text-destructive" />
+                        Grabar segmento A→B
+                      </Button>
+                    ) : (
+                      <Button
+                        onClick={stopSegmentRecording}
+                        variant="destructive"
+                        className="w-full gap-2 animate-pulse"
+                        size="sm"
+                        data-testid="button-stop-recording"
+                      >
+                        <Square className="w-3 h-3" />
+                        Detener y descargar
+                      </Button>
+                    )}
+
+                    <p className="text-[10px] text-muted-foreground text-center">
+                      El fragmento se descarga en formato <span className="font-mono">.webm</span>
+                    </p>
+
+                    {/* Ayuda rápida */}
+                    <div className="rounded-lg bg-card/50 border border-border/40 p-2.5 space-y-1">
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Cómo usarlo</p>
+                      <ol className="text-[10px] text-muted-foreground space-y-0.5 list-decimal list-inside leading-relaxed">
+                        <li>Activá el modo segmento</li>
+                        <li>Reproducí el archivo hasta el inicio deseado y presioná <span className="text-green-400 font-semibold">Marcar A</span></li>
+                        <li>Avanzá hasta el final del fragmento y presioná <span className="text-red-400 font-semibold">Marcar B</span></li>
+                        <li>Presioná <span className="text-primary font-semibold">Grabar segmento A→B</span></li>
+                      </ol>
+                    </div>
+
+                  </div>
+                )}
 
               </div>
             </div>
