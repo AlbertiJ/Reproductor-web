@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Rocio — Reproductor Multimedia",
+  "version": "1.0.0",
+  "description": "Reproductor multimedia integrado: reproduce videos, audio, y URLs externas directamente desde Firefox.",
+  "author": "Rocio Player",
+
+  "icons": {
+    "48": "icons/icon48.png",
+    "96": "icons/icon96.png",
+    "128": "icons/icon128.png"
+  },
+
+  "browser_action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "48": "icons/icon48.png",
+      "96": "icons/icon96.png"
+    },
+    "default_title": "Rocio — Reproductor Multimedia"
+  },
+
+  "background": {
+    "scripts": ["background/background.js"],
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "downloads",
+    "clipboardRead",
+    "notifications"
+  ],
+
+  "host_permissions": [
+    "*://www.youtube.com/*",
+    "*://youtu.be/*",
+    "*://vimeo.com/*",
+    "*://player.vimeo.com/*",
+    "http://localhost:5000/*",
+    "http://127.0.0.1:5000/*"
+  ],
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "rocio-player@extension",
+      "strict_min_version": "109.0"
+    }
+  }
+}
