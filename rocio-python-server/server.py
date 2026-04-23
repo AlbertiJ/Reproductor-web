@@ -42,7 +42,7 @@ from functools import wraps
 
 from flask import (
     Flask, jsonify, request, send_file, send_from_directory,
-    abort, Response, stream_with_context,
+    abort, Response, stream_with_context, session,
 )
 from flask_cors import CORS
 
@@ -266,6 +266,9 @@ def setup_logger(daemon_mode: bool = False):
 # ─────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SESSION_SECRET", "rocio-dev-secret")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"]  = "Lax"
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # Variables globales (se asignan al arrancar)
@@ -283,29 +286,35 @@ logger = logging.getLogger("rocio")
 
 def require_auth(f):
     """
-    Decorador que exige autenticación HTTP Basic Auth.
-    Las credenciales se validan contra rocio.conf.
+    Decorador que exige autenticación.
+    Acepta sesión de cookie (login web) o HTTP Basic Auth (acceso directo a la API).
     """
     @wraps(f)
     def decorated(*args, **kwargs):
+        ip = request.remote_addr or "-"
+
+        # 1) Sesión web (cookie firmada)
+        if session.get("user"):
+            request.authenticated_user = session["user"]
+            return f(*args, **kwargs)
+
+        # 2) HTTP Basic Auth
         auth = request.authorization
-        ip   = request.remote_addr or "-"
+        if auth and verify_credentials(auth.username, auth.password, CONFIG):
+            request.authenticated_user = auth.username
+            return f(*args, **kwargs)
 
-        if not auth or not verify_credentials(auth.username, auth.password, CONFIG):
-            # Registrar intento fallido
-            log_connection(ip, request.method, request.path, 401,
-                           user=auth.username if auth else "anon")
-            logger.warning(f"Auth fallida desde {ip} — usuario: {auth.username if auth else 'ninguno'}")
-            return Response(
-                json.dumps({"error": "Autenticación requerida"}),
-                status=401,
-                mimetype="application/json",
-                headers={"WWW-Authenticate": 'Basic realm="Rocio Servidor"'},
-            )
+        # No autenticado
+        log_connection(ip, request.method, request.path, 401,
+                       user=auth.username if auth else "anon")
+        logger.warning(f"Auth fallida desde {ip} — usuario: {auth.username if auth else 'ninguno'}")
+        return Response(
+            json.dumps({"error": "Autenticación requerida"}),
+            status=401,
+            mimetype="application/json",
+            headers={"WWW-Authenticate": 'Basic realm="Rocio Servidor"'},
+        )
 
-        # Inyectar usuario autenticado para logging
-        request.authenticated_user = auth.username
-        return f(*args, **kwargs)
     return decorated
 
 
@@ -384,11 +393,46 @@ def build_tree_node(path: Path, base: Path, max_depth: int = 3, depth: int = 0) 
 # BLOQUE 12: RUTAS DE LA API
 # ─────────────────────────────────────────────────────────────────
 
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    """
+    POST /api/login
+    Body: { "username": "...", "password": "..." }
+    Inicia sesión y establece una cookie firmada. Sin autenticación previa.
+    """
+    data = request.get_json() or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    ip = request.remote_addr or "-"
+
+    if verify_credentials(username, password, CONFIG):
+        session["user"] = username
+        session.permanent = False
+        log_connection(ip, "POST", "/api/login", 200, user=username)
+        logger.info(f"Login web exitoso: {username} desde {ip}")
+        return jsonify({"ok": True, "user": username})
+
+    log_connection(ip, "POST", "/api/login", 401, user=username or "anon")
+    logger.warning(f"Login web fallido: {username!r} desde {ip}")
+    return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
+
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    """
+    POST /api/logout — cierra la sesión web.
+    """
+    user = session.get("user", "-")
+    session.clear()
+    log_connection(request.remote_addr or "-", "POST", "/api/logout", 200, user=user)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/health", methods=["GET"])
 def health_check():
     """
-    GET /api/health  — sin autenticación
-    Permite al plugin Firefox verificar si el servidor está activo.
+    GET /api/health  — sin autenticación.
+    Verifica que el servidor está activo y devuelve su estado.
     """
     has_ytdlp = has_ffmpeg = False
     try:
@@ -406,6 +450,7 @@ def health_check():
         "status": "ok",
         "version": "2.0.0",
         "media_root": MEDIA_ROOT,
+        "authenticated": bool(session.get("user")),
         "tools": {"yt_dlp": has_ytdlp, "ffmpeg": has_ffmpeg},
     })
 
