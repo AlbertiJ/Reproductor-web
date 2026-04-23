@@ -1,99 +1,115 @@
-# Rocio — Servidor Multimedia Local
+# Rocio — Servidor Python
 
-  Servidor backend en Python que sirve el reproductor web y la API de medios.
-  Una vez iniciado, abres el navegador en `http://localhost:5000` y usas el reproductor directamente — sin extensiones, sin plugins, sin nada extra.
+Servidor backend para el reproductor multimedia Rocio.
 
-  ---
+## Credenciales por defecto
 
-  ## Inicio rápido (3 pasos)
+> El repositorio incluye estas credenciales de acceso de inicio. **Cámbialas en tu primera sesión.**
 
-  ### 1. Instalar dependencias Python
+| Campo | Valor |
+|-------|-------|
+| Usuario | `rocio` |
+| Contraseña | `rocio123` |
+
+Las credenciales se guardan en `rocio.conf` (creado automáticamente la primera vez).
+**Ese archivo no se sube a GitHub** — vive únicamente en tu máquina.
+
+Para cambiar la contraseña:
+```bash
+python3 server.py --set-password
+```
+
+---
+
+## Instalación rápida
+
+```bash
+pip install -r requirements.txt
+```
+
+Para autenticación con usuarios del sistema operativo (opcional):
+```bash
+pip install python-pam
+```
+
+## Uso
+
+```bash
+# Modo básico (sirve tu carpeta home)
+python server.py
+
+# Puerto y directorio personalizados
+python server.py --port 8080 --dir /home/usuario/Videos
+
+# Accesible en red local (para otros dispositivos)
+python server.py --host 0.0.0.0 --port 5000
+
+# Modo debug
+python server.py --debug
+```
+
+---
+
+## Gestión de usuarios
+
+Rocio incluye un sistema de perfiles de usuario con base de datos local (`rocio.db`).
+
+- **Admin**: puede ver y navegar cualquier carpeta, crear/editar/eliminar usuarios.
+- **Usuario**: solo puede acceder a las carpetas que el admin le asigne.
+
+El panel de administración está disponible en el reproductor web (botón "Usuarios" en el menú superior, visible solo para admins).
+
+### Usuarios del sistema operativo (opt-in)
+
+Para permitir que usuarios del sistema operativo (Linux) se autentiquen en Rocio, agrega esto a `rocio.conf`:
+
+```ini
+[auth]
+allow_system_users = true
+```
+
+> **Advertencia de seguridad**: El usuario `root` **nunca** puede autenticarse via web (bloqueado por código). Si activas esta opción, limita el acceso del servidor a `127.0.0.1` (localhost).
+
+---
+
+## API Endpoints
+
+| Método | Ruta | Auth | Descripción |
+|--------|------|------|-------------|
+| POST | `/api/login` | No | Iniciar sesión |
+| POST | `/api/logout` | No | Cerrar sesión |
+| GET | `/api/me` | Sí | Info del usuario actual |
+| GET | `/api/health` | No | Estado del servidor |
+| GET | `/api/tree?path=...` | Sí | Árbol de directorios |
+| GET | `/api/files?path=...` | Sí | Lista archivos de una carpeta |
+| GET | `/api/media?path=...` | Sí | Streaming del archivo |
+| POST | `/api/download` | Sí | Descargar video (YouTube/Vimeo) |
+| POST | `/api/segment` | Sí | Recortar segmento con ffmpeg |
+| GET | `/api/admin/users` | Admin | Listar usuarios |
+| POST | `/api/admin/users` | Admin | Crear usuario |
+| PUT | `/api/admin/users/<id>` | Admin | Editar usuario |
+| DELETE | `/api/admin/users/<id>` | Admin | Eliminar usuario |
+
+---
+
+## Seguridad
+
+- Las contraseñas se almacenan como hash SHA-256 (nunca en texto plano).
+- Rate limiting: máx. 10 intentos fallidos por IP en 5 minutos.
+- El usuario `root` nunca puede autenticarse via web.
+- `rocio.conf` y `rocio.db` están en `.gitignore` — no se suben al repositorio.
+
+## Herramientas opcionales
+
+- **yt-dlp**: Para descargar videos de YouTube, Vimeo y más de 1000 sitios
   ```bash
-  pip3 install -r requirements.txt
+  pip install yt-dlp
   ```
-  > Nota: usa `pip3` (no `pip`) y la bandera `-r` antes del archivo.
+- **ffmpeg**: Para recortar segmentos de video
+  - Ubuntu/Debian: `sudo apt install ffmpeg`
+  - macOS: `brew install ffmpeg`
+  - Windows: https://ffmpeg.org/download.html
 
-  ### 2. Compilar el reproductor web
-  ```bash
-  bash build.sh
-  ```
-  Esto compila la interfaz React y la copia a `static/` para que el servidor la sirva.  
-  Solo necesitas hacerlo la primera vez o cuando actualices la interfaz.
+## Nube
 
-  ### 3. Iniciar el servidor
-  ```bash
-  python3 server.py
-  ```
-
-  ### Abrir en el navegador
-  ```
-  http://localhost:5000
-  ```
-
-  ---
-
-  ## Opciones del servidor
-
-  | Comando | Descripción |
-  |---------|-------------|
-  | `python3 server.py` | Iniciar en consola (Ctrl+C para detener) |
-  | `python3 server.py --daemon` | Iniciar en segundo plano |
-  | `python3 server.py --stop` | Detener el proceso en segundo plano |
-  | `python3 server.py --dir /ruta` | Servir directorio específico de medios |
-  | `python3 server.py --host 0.0.0.0` | Accesible desde toda la red local |
-  | `python3 server.py --port 8080` | Cambiar el puerto |
-  | `python3 server.py --set-password` | Cambiar la contraseña |
-
-  ---
-
-  ## Autenticación
-
-  Las credenciales se guardan en `rocio.conf` (junto al script), nunca en el código.  
-  La contraseña se almacena hasheada con SHA-256.
-
-  **Por defecto:** usuario `rocio` / clave `rocio123`
-
-  Para cambiar la clave:
-  ```bash
-  python3 server.py --set-password
-  ```
-
-  ---
-
-  ## Archivos que genera el servidor
-
-  | Archivo | Descripción |
-  |---------|-------------|
-  | `rocio.conf` | Configuración: usuario, clave (hash), host, puerto |
-  | `connections.log` | Registro de todas las conexiones |
-  | `rocio.pid` | PID del proceso demonio (solo en modo `--daemon`) |
-  | `server.log` | Log del servidor en modo demonio |
-  | `static/` | Archivos compilados del reproductor web |
-
-  ---
-
-  ## API endpoints
-
-  | Método | Ruta | Auth | Descripción |
-  |--------|------|------|-------------|
-  | GET | `/` | No | Reproductor web |
-  | GET | `/api/health` | No | Estado del servidor |
-  | GET | `/api/tree` | Sí | Árbol de directorios |
-  | GET | `/api/files` | Sí | Lista de archivos de medios |
-  | GET | `/api/media?path=...` | Sí | Streaming de video/audio |
-  | POST | `/api/download` | Sí | Descargar de YouTube/Vimeo |
-  | POST | `/api/segment` | Sí | Recortar segmento con ffmpeg |
-  | GET | `/api/connections` | Sí | Ver registro de conexiones |
-
-  ---
-
-  ## ffmpeg (opcional — para recorte de segmentos)
-
-  ```bash
-  # Ubuntu / Debian
-  sudo apt install ffmpeg
-
-  # macOS
-  brew install ffmpeg
-  ```
-  
+Para desplegar en la nube (AWS, GCP, Railway, etc.), usa `--host 0.0.0.0` y asegúrate de configurar un proxy reverso (nginx/caddy) con HTTPS.
