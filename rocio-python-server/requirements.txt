@@ -1,0 +1,18 @@
+# ╔══════════════════════════════════════════════════════╗
+# ║  ROCIO — Dependencias Python                         ║
+# ║  Instalar con: pip install -r requirements.txt       ║
+# ╚══════════════════════════════════════════════════════╝
+
+# Framework web REST API
+flask>=3.0.0
+
+# Soporte CORS (Cross-Origin Resource Sharing) para el frontend
+flask-cors>=4.0.0
+
+# Descargador de videos de YouTube, Vimeo, y +1000 sitios
+yt-dlp>=2024.1.0
+
+# Nota: ffmpeg debe instalarse por separado en el sistema:
+#   Ubuntu/Debian: sudo apt install ffmpeg
+#   macOS:         brew install ffmpeg
+#   Windows:       https://ffmpeg.org/download.html
