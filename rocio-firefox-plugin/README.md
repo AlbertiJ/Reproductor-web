@@ -1,61 +1,51 @@
 # Rocio — Plugin para Firefox
 
-Extensión de Firefox que integra el reproductor multimedia Rocio directamente en el navegador.
+  Extensión Manifest V3 para Firefox que integra el reproductor Rocio en el navegador.
 
-## Funcionalidades
+  ## Instalación en Firefox
 
-- Reproductor de video/audio en el popup
-- Carga archivos locales desde el disco
-- Carga URLs de YouTube, Vimeo y archivos directos
-- Grabación de segmentos con inicio/fin marcables
-- Compartir en WhatsApp, Telegram, Facebook e Instagram
-- Detección automática de videos en páginas web
-- Conexión con el servidor Python local
+  1. Abre Firefox y ve a: `about:debugging`
+  2. Haz clic en **Este Firefox**
+  3. Haz clic en **Cargar complemento temporal...**
+  4. Selecciona el archivo `rocio-firefox-plugin/manifest.json`
 
-## Instalación en Firefox
+  > **Importante:** el plugin se carga temporalmente y desaparece al cerrar Firefox.
+  > Para instalación permanente usa `web-ext` (ver abajo).
 
-### Modo desarrollo (temporal)
-1. Abre Firefox y ve a: `about:debugging`
-2. Haz clic en **Este Firefox**
-3. Haz clic en **Cargar complemento temporal...**
-4. Selecciona el archivo `manifest.json` de esta carpeta
+  ## Instalación permanente con web-ext
 
-### Empaquetado permanente
-```bash
-# Instalar web-ext (herramienta oficial de Mozilla)
-npm install -g web-ext
+  ```bash
+  # Instalar web-ext (herramienta oficial de Mozilla)
+  npm install -g web-ext
 
-# Empaquetar la extensión
-web-ext build
+  # Desde la carpeta rocio-firefox-plugin/
+  cd rocio-firefox-plugin
+  web-ext build      # Genera el .zip para distribución
+  web-run run        # Abre Firefox con el plugin cargado y recarga automática
+  ```
 
-# Ejecutar en Firefox con recarga automática
-web-ext run
-```
+  ## Estructura
 
-## Estructura del plugin
+  ```
+  rocio-firefox-plugin/
+  ├── manifest.json          # Manifest V3
+  ├── popup/
+  │   ├── popup.html         # Interfaz del popup
+  │   ├── popup.css          # Estilos
+  │   └── popup.js           # Lógica
+  ├── background/
+  │   └── background.js      # Script de fondo (detección de videos)
+  └── content/
+      └── content.js         # Inyectado en páginas web
+  ```
 
-```
-rocio-firefox-plugin/
-├── manifest.json          # Configuración principal
-├── popup/
-│   ├── popup.html         # Interfaz del popup
-│   ├── popup.css          # Estilos del popup
-│   └── popup.js           # Lógica del popup
-├── background/
-│   └── background.js      # Script de fondo (detección, storage)
-├── content/
-│   └── content.js         # Script inyectado en páginas web
-└── icons/
-    ├── icon48.png
-    ├── icon96.png
-    └── icon128.png
-```
+  ## Funciones del plugin
 
-## Conexión con el servidor Python
-
-El plugin puede conectarse al servidor Python local (`server.py`) para:
-- Navegar por directorios locales
-- Hacer streaming de archivos de video/audio
-- Recortar segmentos con ffmpeg
-
-Asegúrate de que el servidor esté corriendo: `python server.py`
+  - Reproductor de video/audio directamente en el popup
+  - Cargar archivo local desde el disco
+  - Cargar URL de YouTube, Vimeo o enlace directo
+  - Grabación de segmentos con marcado de inicio/fin
+  - Compartir en WhatsApp, Telegram, Facebook e Instagram
+  - Detección automática de videos en páginas visitadas
+  - Indicador de estado del servidor Python local
+  
