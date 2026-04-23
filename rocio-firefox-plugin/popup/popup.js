@@ -13,8 +13,8 @@
 // URL del servidor Python local
 const SERVER_URL = "http://localhost:5000";
 
-// URL del reproductor web completo (ajustar según despliegue)
-const FULL_PLAYER_URL = browser.runtime.getURL("../player/player.html");
+// URL del reproductor web completo (página web del reproductor)
+const FULL_PLAYER_URL = "http://localhost:22900"; // Ajusta al puerto de tu reproductor web
 
 // Referencias al video element y controles
 const video = document.getElementById("video-player");
@@ -403,7 +403,6 @@ document.getElementById("btn-copy-link").addEventListener("click", async () => {
 function showNotification(title, message) {
   browser.notifications.create({
     type: "basic",
-    iconUrl: "../icons/icon48.png",
     title: `Rocio — ${title}`,
     message: message,
   });
