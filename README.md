@@ -16,8 +16,7 @@
 
   ### 🎬 Reproductor
   - Soporte para video (MP4, MKV, AVI, WebM…) y audio (MP3, FLAC, OGG, WAV…)
-  - Panel lateral de lista estilo YouTube con thumbnails y hover preview flotante
-  - Árbol de directorios del disco con navegación completa
+  - Panel lateral de lista estilo YouTube con thumbnails y **hover preview flotante** (video en miniatura al pasar el mouse)
   - Toggle de aspecto de video: Ajustado / Rellenar / Estirar
   - Controles de segmento: marcadores A/B para recortar y grabar en WebM
   - Reproducción de URLs externas: YouTube, Vimeo, MP4/MP3 directo (vía yt-dlp)
@@ -26,15 +25,23 @@
   - Paneles laterales ocultables
 
   ### 📁 Carpetas Favoritas
-  - Marcá cualquier carpeta del árbol de directorios como favorita con un solo clic
-  - Las favoritas aparecen fijadas en la parte superior del árbol para acceso rápido
-  - Se guardan por usuario, cada perfil tiene sus propios favoritos
+  - Árbol de directorios del disco completo en el panel derecho
+  - Marcá cualquier carpeta del árbol con ★ para agregarla a Favoritos
+  - Al marcar una carpeta: el panel derecho navega a **Favoritos** y la **Biblioteca izquierda** se filtra automáticamente mostrando solo los archivos de esa carpeta
+  - Las carpetas favoritas son clickeables — al hacer clic en una carga sus archivos en la Biblioteca
+  - La carpeta activa se muestra como un chip con botón × para volver a la biblioteca completa
+
+  ### ★ Archivos Favoritos
+  - Cualquier archivo de la Biblioteca se puede marcar con ★ (aparece al hacer hover)
+  - La pestaña **★ Favoritos** del panel izquierdo muestra todos los archivos marcados
+  - Si hay archivos favoritos de varias carpetas, aparecen **filtros por carpeta** (pastillas horizontales) para agruparlos
+  - Estado vacío diferenciado: sin favoritos globales / subfiltro sin resultados
 
   ### 👥 Perfiles de Usuario
   - Autenticación con usuario y contraseña (base de datos SQLite local)
   - Roles: **admin** y **user**
   - Los admins pueden:
-    - Crear, editar y eliminar usuarios
+    - Crear, editar y eliminar usuarios desde el panel 👥 del encabezado
     - Asignar directorios permitidos por usuario (las carpetas que cada uno puede ver)
     - Cambiar roles
   - Los usuarios limitados solo ven las carpetas que el admin les asignó
@@ -62,6 +69,7 @@
       ├── server.py                  # API REST + streaming + auth + yt-dlp
       ├── requirements.txt           # Dependencias Python
       ├── setup.sh                   # Script de instalación automática
+      ├── build.sh                   # Compila el frontend y lo copia a static/
       └── README.md                  # Documentación del servidor
   ```
 
@@ -69,24 +77,49 @@
 
   ## Inicio rápido
 
-  ### 1 — Servidor Python
+  ### 1 — Clonar el repositorio
+
+  ```bash
+  git clone https://github.com/AlbertiJ/Reproductor-web.git
+  cd Reproductor-web
+  ```
+
+  ### 2 — Instalar y compilar
 
   ```bash
   cd rocio-python-server
 
-  # Instalar dependencias
-  pip3 install -r requirements.txt
-
-  # O con el script automático (también instala ffmpeg y yt-dlp)
+  # Instalar dependencias Python (y ffmpeg, yt-dlp)
   bash setup.sh
 
-  # Iniciar apuntando a tu carpeta de medios
+  # Compilar la interfaz React y copiarla al servidor
+  bash build.sh
+  ```
+
+  ### 3 — Iniciar el servidor
+
+  ```bash
   python3 server.py --dir /ruta/a/tus/videos
   ```
 
   El servidor queda escuchando en `http://localhost:5000`.
 
-  **Opciones disponibles:**
+  ### 4 — Acceder al reproductor
+
+  - **Misma máquina:** `http://localhost:5000`
+  - **Otro dispositivo en la red:** `http://<ip-de-tu-pc>:5000`
+
+  ### Actualizar a una nueva versión
+
+  ```bash
+  git pull && cd rocio-python-server && bash build.sh
+  ```
+
+  Luego reiniciá el servidor.
+
+  ---
+
+  ## Opciones del servidor
 
   | Opción | Descripción | Default |
   |--------|-------------|---------|
@@ -96,14 +129,9 @@
   | `--daemon` | Correr en segundo plano | — |
   | `--log` | Ruta del archivo de log | — |
 
-  ### 2 — Acceder al reproductor
+  ---
 
-  Abrí el navegador y navegá a:
-
-  - **Misma máquina:** `http://localhost:5000`
-  - **Otro dispositivo en la red:** `http://<ip-de-tu-pc>:5000`
-
-  ### 3 — Primer inicio de sesión
+  ## Primer inicio de sesión
 
   Las credenciales por defecto se configuran en `rocio.conf` (se crea automáticamente al primer arranque):
 
