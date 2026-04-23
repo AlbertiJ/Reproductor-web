@@ -65,113 +65,82 @@ interface VideoItem {
 }
 
 /* ================================================================
- * DATOS DEMO: Árbol de disco raíz simulado
- * Representa la estructura de un disco duro real
+ * API — base URL y helpers de fetch con credenciales de sesión
  * ================================================================ */
-const DISK_ROOT: FileNode[] = [
-  {
-    id: "home", name: "Inicio (/home/usuario)", type: "folder",
-    path: "/home/usuario", checked: false, isOpen: true,
-    children: [
-      {
-        id: "home-videos", name: "Videos", type: "folder",
-        path: "/home/usuario/Videos", checked: false, isOpen: false,
-        children: [
-          { id: "hv-1", name: "Peliculas", type: "folder", path: "/home/usuario/Videos/Peliculas", checked: false, isOpen: false,
-            children: [
-              { id: "hv-1-1", name: "Inception.mp4", type: "video", path: "/home/usuario/Videos/Peliculas/Inception.mp4", checked: false },
-              { id: "hv-1-2", name: "Interstellar.mkv", type: "video", path: "/home/usuario/Videos/Peliculas/Interstellar.mkv", checked: false },
-              { id: "hv-1-3", name: "Dune.mp4", type: "video", path: "/home/usuario/Videos/Peliculas/Dune.mp4", checked: false },
-            ]
-          },
-          { id: "hv-2", name: "Series", type: "folder", path: "/home/usuario/Videos/Series", checked: false, isOpen: false,
-            children: [
-              { id: "hv-2-1", name: "Breaking_Bad_S01E01.mp4", type: "video", path: "/home/usuario/Videos/Series/Breaking_Bad_S01E01.mp4", checked: false },
-              { id: "hv-2-2", name: "The_Wire_S01E01.avi", type: "video", path: "/home/usuario/Videos/Series/The_Wire_S01E01.avi", checked: false },
-              { id: "hv-2-3", name: "Severance_S02E01.mkv", type: "video", path: "/home/usuario/Videos/Series/Severance_S02E01.mkv", checked: false },
-            ]
-          },
-          { id: "hv-3", name: "Documentales", type: "folder", path: "/home/usuario/Videos/Documentales", checked: false, isOpen: false,
-            children: [
-              { id: "hv-3-1", name: "Planet_Earth.mp4", type: "video", path: "/home/usuario/Videos/Documentales/Planet_Earth.mp4", checked: false },
-              { id: "hv-3-2", name: "Free_Solo.mkv", type: "video", path: "/home/usuario/Videos/Documentales/Free_Solo.mkv", checked: false },
-            ]
-          },
-          { id: "hv-4", name: "Presentacion.mp4", type: "video", path: "/home/usuario/Videos/Presentacion.mp4", checked: false },
-        ]
-      },
-      {
-        id: "home-music", name: "Musica", type: "folder",
-        path: "/home/usuario/Musica", checked: false, isOpen: false,
-        children: [
-          { id: "hm-1", name: "Rock", type: "folder", path: "/home/usuario/Musica/Rock", checked: false, isOpen: false,
-            children: [
-              { id: "hm-1-1", name: "song1.mp3", type: "audio", path: "/home/usuario/Musica/Rock/song1.mp3", checked: false },
-              { id: "hm-1-2", name: "song2.flac", type: "audio", path: "/home/usuario/Musica/Rock/song2.flac", checked: false },
-            ]
-          },
-          { id: "hm-2", name: "Jazz", type: "folder", path: "/home/usuario/Musica/Jazz", checked: false, isOpen: false,
-            children: [
-              { id: "hm-2-1", name: "miles_davis.mp3", type: "audio", path: "/home/usuario/Musica/Jazz/miles_davis.mp3", checked: false },
-            ]
-          },
-        ]
-      },
-      {
-        id: "home-dl", name: "Descargas", type: "folder",
-        path: "/home/usuario/Descargas", checked: false, isOpen: false,
-        children: [
-          { id: "hdl-1", name: "tutorial_react.mp4", type: "video", path: "/home/usuario/Descargas/tutorial_react.mp4", checked: false },
-          { id: "hdl-2", name: "podcast_ep42.mp3", type: "audio", path: "/home/usuario/Descargas/podcast_ep42.mp3", checked: false },
-          { id: "hdl-3", name: "conferencia.webm", type: "video", path: "/home/usuario/Descargas/conferencia.webm", checked: false },
-        ]
-      },
-    ]
-  },
-  {
-    id: "media", name: "Disco Externo (/media/USB)", type: "folder",
-    path: "/media/USB", checked: false, isOpen: false,
-    children: [
-      { id: "usb-1", name: "Conciertos", type: "folder", path: "/media/USB/Conciertos", checked: false, isOpen: false,
-        children: [
-          { id: "usb-1-1", name: "Pink_Floyd_Live.mp4", type: "video", path: "/media/USB/Conciertos/Pink_Floyd_Live.mp4", checked: false },
-          { id: "usb-1-2", name: "Radiohead_Live.mkv", type: "video", path: "/media/USB/Conciertos/Radiohead_Live.mkv", checked: false },
-        ]
-      },
-      { id: "usb-2", name: "Grabaciones", type: "folder", path: "/media/USB/Grabaciones", checked: false, isOpen: false,
-        children: [
-          { id: "usb-2-1", name: "reunion_2024.mp4", type: "video", path: "/media/USB/Grabaciones/reunion_2024.mp4", checked: false },
-          { id: "usb-2-2", name: "cumple_maria.mov", type: "video", path: "/media/USB/Grabaciones/cumple_maria.mov", checked: false },
-        ]
-      },
-    ]
-  },
-];
+const API_BASE = window.location.origin;
+
+async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+  if (res.status === 401) throw Object.assign(new Error("Unauthorized"), { status: 401 });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<T>;
+}
+
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw Object.assign(new Error(err.error || res.statusText), { status: res.status });
+  }
+  return res.json() as Promise<T>;
+}
 
 /* ================================================================
- * DATOS DEMO: Lista de videos para el panel izquierdo y cola
- * Colores de thumbnail generados (sin imágenes externas)
+ * UTILIDADES de color y conversión de nodo a VideoItem
  * ================================================================ */
-const DEMO_VIDEOS: VideoItem[] = [
-  { id: "v1", name: "Inception.mp4", path: "/home/usuario/Videos/Peliculas/Inception.mp4", type: "video", duration: "2:28:23", folder: "Peliculas", color: "from-blue-900 to-blue-600" },
-  { id: "v2", name: "Interstellar.mkv", path: "/home/usuario/Videos/Peliculas/Interstellar.mkv", type: "video", duration: "2:49:03", folder: "Peliculas", color: "from-indigo-900 to-purple-700" },
-  { id: "v3", name: "Dune.mp4", path: "/home/usuario/Videos/Peliculas/Dune.mp4", type: "video", duration: "2:35:01", folder: "Peliculas", color: "from-amber-900 to-orange-600" },
-  { id: "v4", name: "Breaking_Bad_S01E01.mp4", path: "/home/usuario/Videos/Series/Breaking_Bad_S01E01.mp4", type: "video", duration: "58:00", folder: "Series", color: "from-green-900 to-emerald-600" },
-  { id: "v5", name: "The_Wire_S01E01.avi", path: "/home/usuario/Videos/Series/The_Wire_S01E01.avi", type: "video", duration: "57:30", folder: "Series", color: "from-gray-800 to-slate-600" },
-  { id: "v6", name: "Severance_S02E01.mkv", path: "/home/usuario/Videos/Series/Severance_S02E01.mkv", type: "video", duration: "52:15", folder: "Series", color: "from-sky-900 to-cyan-700" },
-  { id: "v7", name: "Planet_Earth.mp4", path: "/home/usuario/Videos/Documentales/Planet_Earth.mp4", type: "video", duration: "50:00", folder: "Documentales", color: "from-teal-900 to-green-600" },
-  { id: "v8", name: "Free_Solo.mkv", path: "/home/usuario/Videos/Documentales/Free_Solo.mkv", type: "video", duration: "1:40:12", folder: "Documentales", color: "from-red-900 to-rose-600" },
-  { id: "v9", name: "tutorial_react.mp4", path: "/home/usuario/Descargas/tutorial_react.mp4", type: "video", duration: "1:22:45", folder: "Descargas", color: "from-violet-900 to-purple-600" },
-  { id: "v10", name: "conferencia.webm", path: "/home/usuario/Descargas/conferencia.webm", type: "video", duration: "45:00", folder: "Descargas", color: "from-pink-900 to-rose-700" },
-  { id: "v11", name: "Pink_Floyd_Live.mp4", path: "/media/USB/Conciertos/Pink_Floyd_Live.mp4", type: "video", duration: "1:55:00", folder: "Conciertos", color: "from-fuchsia-900 to-pink-600" },
-  { id: "v12", name: "Radiohead_Live.mkv", path: "/media/USB/Conciertos/Radiohead_Live.mkv", type: "video", duration: "2:02:10", folder: "Conciertos", color: "from-zinc-800 to-neutral-600" },
-  { id: "v13", name: "reunion_2024.mp4", path: "/media/USB/Grabaciones/reunion_2024.mp4", type: "video", duration: "1:12:30", folder: "Grabaciones", color: "from-blue-800 to-sky-600" },
-  { id: "v14", name: "cumple_maria.mov", path: "/media/USB/Grabaciones/cumple_maria.mov", type: "video", duration: "28:15", folder: "Grabaciones", color: "from-yellow-800 to-amber-600" },
-  { id: "v15", name: "Presentacion.mp4", path: "/home/usuario/Videos/Presentacion.mp4", type: "video", duration: "15:20", folder: "Videos", color: "from-cyan-900 to-teal-600" },
-  { id: "a1", name: "miles_davis.mp3", path: "/home/usuario/Musica/Jazz/miles_davis.mp3", type: "audio", duration: "5:42", folder: "Jazz", color: "from-purple-900 to-violet-700" },
-  { id: "a2", name: "song1.mp3", path: "/home/usuario/Musica/Rock/song1.mp3", type: "audio", duration: "3:15", folder: "Rock", color: "from-red-800 to-orange-600" },
-  { id: "a3", name: "podcast_ep42.mp3", path: "/home/usuario/Descargas/podcast_ep42.mp3", type: "audio", duration: "1:02:00", folder: "Descargas", color: "from-lime-900 to-green-700" },
+const PALETTE = [
+  "from-blue-900 to-blue-600",
+  "from-indigo-900 to-purple-700",
+  "from-amber-900 to-orange-600",
+  "from-green-900 to-emerald-600",
+  "from-gray-800 to-slate-600",
+  "from-sky-900 to-cyan-700",
+  "from-teal-900 to-green-600",
+  "from-red-900 to-rose-600",
+  "from-violet-900 to-purple-600",
+  "from-pink-900 to-rose-700",
+  "from-fuchsia-900 to-pink-600",
+  "from-zinc-800 to-neutral-600",
+  "from-yellow-800 to-amber-600",
+  "from-cyan-900 to-teal-600",
+  "from-purple-900 to-violet-700",
 ];
+
+function strHash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function nodeToVideoItem(node: FileNode): VideoItem {
+  const parts = node.path.split("/").filter(Boolean);
+  const folder = parts.length > 1 ? parts[parts.length - 2] : "/";
+  return {
+    id: node.path,
+    name: node.name,
+    path: node.path,
+    type: node.type as "video" | "audio",
+    duration: "--:--",
+    folder,
+    color: PALETTE[strHash(node.name) % PALETTE.length],
+  };
+}
+
+function extractMediaFiles(nodes: FileNode[]): VideoItem[] {
+  const items: VideoItem[] = [];
+  for (const node of nodes) {
+    if (node.type === "video" || node.type === "audio") {
+      items.push(nodeToVideoItem(node));
+    }
+    if (node.children) items.push(...extractMediaFiles(node.children));
+  }
+  return items;
+}
 
 const ITEMS_PER_PAGE = 10;
 
@@ -471,8 +440,19 @@ export default function Player() {
   const [externalUrl, setExternalUrl] = useState("");
   const [urlType, setUrlType] = useState<"youtube" | "vimeo" | "direct" | "unknown" | null>(null);
 
-  /* ── Árbol de directorios (disco raíz) ── */
-  const [diskTree, setDiskTree] = useState<FileNode[]>(DISK_ROOT);
+  /* ── Auth: sesión web ── */
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginUser, setLoginUser] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  /* ── Datos reales desde el servidor ── */
+  const [videoList, setVideoList] = useState<VideoItem[]>([]);
+  const [isLoadingTree, setIsLoadingTree] = useState(false);
+
+  /* ── Árbol de directorios (cargado desde /api/tree) ── */
+  const [diskTree, setDiskTree] = useState<FileNode[]>([]);
 
   /* ── Favoritos: carpetas marcadas como favoritas (panel derecho) ── */
   const [favorites, setFavorites] = useState<FileNode[]>([]);
@@ -500,14 +480,14 @@ export default function Player() {
   /* ── Lista de videos activa (panel izquierdo) ── */
   const [videoListFilter, setVideoListFilter] = useState<"all" | "video" | "audio">("all");
   const filteredVideos = useMemo(() => {
-    if (videoListFilter === "all") return DEMO_VIDEOS;
-    return DEMO_VIDEOS.filter(v => v.type === videoListFilter);
-  }, [videoListFilter]);
+    if (videoListFilter === "all") return videoList;
+    return videoList.filter(v => v.type === videoListFilter);
+  }, [videoList, videoListFilter]);
 
   /* ── Videos favoritos del panel izquierdo (derivado de favoriteVideoIds) ── */
   const favoriteVideos = useMemo(
-    () => DEMO_VIDEOS.filter(v => favoriteVideoIds.has(v.id)),
-    [favoriteVideoIds]
+    () => videoList.filter(v => favoriteVideoIds.has(v.id)),
+    [videoList, favoriteVideoIds]
   );
 
   /* ── Paginación de la cola ── */
@@ -516,6 +496,31 @@ export default function Player() {
     queuePage * ITEMS_PER_PAGE,
     queuePage * ITEMS_PER_PAGE + ITEMS_PER_PAGE
   );
+
+  /* ================================================================
+   * EFECTO: verificar sesión activa al cargar la app
+   * ================================================================ */
+  useEffect(() => {
+    apiGet<{ status: string; authenticated?: boolean }>("/api/health")
+      .then(data => { if (data.authenticated) setIsLoggedIn(true); })
+      .catch(() => {}); // servidor no disponible — mostrar login
+  }, []);
+
+  /* ================================================================
+   * EFECTO: cargar árbol real al iniciar sesión
+   * ================================================================ */
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    setIsLoadingTree(true);
+    apiGet<{ tree: FileNode }>("/api/tree")
+      .then(({ tree }) => {
+        const children = tree.children || [];
+        setDiskTree(children);
+        setVideoList(extractMediaFiles(children));
+      })
+      .catch(() => toast({ title: "Error", description: "No se pudo cargar el árbol de archivos", variant: "destructive" }))
+      .finally(() => setIsLoadingTree(false));
+  }, [isLoggedIn]);
 
   /* ================================================================
    * EFECTO: sincronizar tiempo del video
@@ -632,21 +637,46 @@ export default function Player() {
   /* ================================================================
    * SELECCIONAR VIDEO DE LA LISTA / ÁRBOL
    * ================================================================ */
+  /* ── Login / Logout ── */
+  const handleLogin = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setIsLoggingIn(true);
+    setLoginError("");
+    try {
+      await apiPost<{ ok: boolean }>("/api/login", { username: loginUser, password: loginPass });
+      setIsLoggedIn(true);
+    } catch (err: unknown) {
+      setLoginError((err as Error).message || "Error de conexión con el servidor");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await apiPost("/api/logout", {}).catch(() => {});
+    setIsLoggedIn(false);
+    setVideoList([]);
+    setDiskTree([]);
+    setMediaSource(null);
+    setActiveVideoId(null);
+    setMediaName("");
+  };
+
   const selectVideoItem = useCallback((item: VideoItem) => {
     setActiveVideoId(item.id);
     setMediaName(item.name);
     setMediaType(item.type);
-    setMediaSource(null);
+    setMediaSource(`${API_BASE}/api/media?path=${encodeURIComponent(item.path)}`);
     setEmbedUrl("");
-    toast({ title: "Seleccionado", description: `${item.folder} / ${item.name}` });
+    toast({ title: "Reproduciendo", description: `${item.folder} / ${item.name}` });
   }, []);
 
   const handleSelectFromTree = (node: FileNode) => {
     setMediaName(node.name);
     setMediaType(node.type === "audio" ? "audio" : "video");
-    setMediaSource(null);
+    setMediaSource(`${API_BASE}/api/media?path=${encodeURIComponent(node.path)}`);
     setEmbedUrl("");
-    setActiveVideoId(null);
+    setActiveVideoId(node.path);
     toast({ title: "Archivo seleccionado", description: node.path });
   };
 
@@ -735,16 +765,16 @@ export default function Player() {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
-        const item = DEMO_VIDEOS.find(v => v.id === id);
+        const item = videoList.find(v => v.id === id);
         toast({ title: "Quitado de Favoritos", description: item?.name });
       } else {
         next.add(id);
-        const item = DEMO_VIDEOS.find(v => v.id === id);
+        const item = videoList.find(v => v.id === id);
         toast({ title: "Agregado a Favoritos", description: item?.name });
       }
       return next;
     });
-  }, [toast]);
+  }, [toast, videoList]);
 
   /* ================================================================
    * GRABACIÓN POR SEGMENTO
@@ -813,7 +843,69 @@ export default function Player() {
   };
 
   /* ================================================================
-   * RENDER
+   * RENDER — Pantalla de Login (si no hay sesión)
+   * ================================================================ */
+  if (!isLoggedIn) {
+    return (
+      <div className={`h-screen bg-background flex items-center justify-center ${isDark ? "dark" : ""}`}>
+        <div className="w-full max-w-sm px-6">
+          <div className="flex flex-col items-center mb-8 gap-3">
+            <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center border border-primary/20">
+              <Radio className="w-8 h-8 text-primary/70" />
+            </div>
+            <div className="text-center">
+              <h1 className="text-2xl font-bold text-foreground tracking-tight">Rocio</h1>
+              <p className="text-sm text-muted-foreground mt-0.5">Reproductor Multimedia</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Usuario</label>
+              <Input
+                value={loginUser}
+                onChange={e => setLoginUser(e.target.value)}
+                placeholder="rocio"
+                autoComplete="username"
+                autoFocus
+                disabled={isLoggingIn}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Contraseña</label>
+              <Input
+                type="password"
+                value={loginPass}
+                onChange={e => setLoginPass(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="current-password"
+                disabled={isLoggingIn}
+              />
+            </div>
+
+            {loginError && (
+              <p className="text-sm text-destructive text-center">{loginError}</p>
+            )}
+
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={isLoggingIn || !loginUser || !loginPass}
+            >
+              {isLoggingIn ? "Conectando..." : "Iniciar sesión"}
+            </Button>
+          </form>
+
+          <p className="text-center text-xs text-muted-foreground mt-6">
+            Credenciales configuradas en <code className="text-foreground/70">rocio.conf</code>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  /* ================================================================
+   * RENDER — Reproductor principal
    * ================================================================ */
   return (
     <div className={`h-screen bg-background flex flex-col overflow-hidden ${isDark ? "dark" : ""}`}>
@@ -848,6 +940,22 @@ export default function Player() {
         )}
 
         <div className="flex items-center gap-1 ml-auto">
+          {/* Cerrar sesión */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost" size="icon"
+                onClick={handleLogout}
+                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                data-testid="button-logout"
+                title="Cerrar sesión"
+              >
+                <ExternalLink className="w-4 h-4 rotate-180" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Cerrar sesión</TooltipContent>
+          </Tooltip>
+
           {/* Toggle modo oscuro/claro */}
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1095,28 +1203,10 @@ export default function Player() {
                 <p className="text-muted-foreground text-sm font-medium">{mediaName}</p>
                 <audio ref={videoRef as unknown as React.RefObject<HTMLAudioElement>} src={mediaSource} data-testid="audio-player" />
               </div>
-            ) : activeVideoId ? (
-              /* Video seleccionado de la lista (sin URL real en demo) */
-              <div className="flex flex-col items-center gap-5 text-center px-8">
-                {(() => {
-                  const item = DEMO_VIDEOS.find(v => v.id === activeVideoId);
-                  if (!item) return null;
-                  return (
-                    <>
-                      <div className={`w-32 h-20 rounded-xl bg-gradient-to-br ${item.color} flex items-center justify-center shadow-2xl`}>
-                        {item.type === "audio" ? <Music className="w-10 h-10 text-white/50" /> : <Video className="w-10 h-10 text-white/40" />}
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-semibold text-foreground">{item.name}</h3>
-                        <p className="text-sm text-muted-foreground">{item.folder} · {item.duration}</p>
-                        <p className="text-xs text-muted-foreground/60 mt-1 font-mono">{item.path}</p>
-                      </div>
-                      <p className="text-xs text-muted-foreground/50">
-                        Conecta el servidor Python local para reproducir archivos reales
-                      </p>
-                    </>
-                  );
-                })()}
+            ) : activeVideoId && isLoadingTree ? (
+              <div className="flex flex-col items-center gap-3 text-center px-8">
+                <div className="w-10 h-10 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                <p className="text-sm text-muted-foreground">Cargando archivos...</p>
               </div>
             ) : (
               /* Pantalla de bienvenida */
