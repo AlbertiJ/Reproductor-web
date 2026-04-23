@@ -5,24 +5,13 @@
   "description": "Reproductor multimedia integrado: reproduce videos, audio, y URLs externas directamente desde Firefox.",
   "author": "Rocio Player",
 
-  "icons": {
-    "48": "icons/icon48.png",
-    "96": "icons/icon96.png",
-    "128": "icons/icon128.png"
-  },
-
-  "browser_action": {
+  "action": {
     "default_popup": "popup/popup.html",
-    "default_icon": {
-      "48": "icons/icon48.png",
-      "96": "icons/icon96.png"
-    },
     "default_title": "Rocio — Reproductor Multimedia"
   },
 
   "background": {
-    "scripts": ["background/background.js"],
-    "type": "module"
+    "scripts": ["background/background.js"]
   },
 
   "content_scripts": [
@@ -38,7 +27,6 @@
     "tabs",
     "storage",
     "downloads",
-    "clipboardRead",
     "notifications"
   ],
 
