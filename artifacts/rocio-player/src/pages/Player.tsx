@@ -170,7 +170,6 @@ function extractMediaFiles(nodes: FileNode[]): VideoItem[] {
   return items;
 }
 
-const ITEMS_PER_PAGE = 10;
 
 /* ================================================================
  * UTILIDADES
@@ -326,8 +325,56 @@ function FileTreeNode({
 }
 
 /* ================================================================
- * COMPONENTE: VideoListItem — item de video en panel izquierdo
- * Formato YouTube sidebar
+ * COMPONENTE: HoverVideoPreview — miniatura flotante al pasar el mouse
+ * Se carga solo cuando el usuario hace hover sobre un ítem del panel
+ * ================================================================ */
+function HoverVideoPreview({ item }: { item: VideoItem }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const src = `${API_BASE}/api/media?path=${encodeURIComponent(item.path)}`;
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onLoaded = () => {
+      v.currentTime = Math.min(5, (v.duration || 10) * 0.08);
+      v.play().catch(() => {});
+    };
+    v.addEventListener("loadedmetadata", onLoaded);
+    return () => {
+      v.removeEventListener("loadedmetadata", onLoaded);
+      v.pause();
+    };
+  }, []);
+
+  return (
+    <div>
+      <div className="relative h-28">
+        <video
+          ref={videoRef}
+          src={src}
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          className="w-full h-full object-cover"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+        <div className="absolute bottom-2 left-2 right-2">
+          <p className="text-white text-xs font-semibold truncate leading-tight">{item.name}</p>
+          <p className="text-white/60 text-[10px] font-mono">{item.duration}</p>
+        </div>
+      </div>
+      <div className="px-2.5 py-1.5 flex items-center gap-1.5 border-t border-border/50">
+        <Video className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+        <p className="text-[10px] text-muted-foreground truncate">{item.folder}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+ * COMPONENTE: VideoListItem — fila del panel izquierdo
+ * Muestra miniatura flotante al pasar el mouse sobre el ítem
  * ================================================================ */
 function VideoListItem({
   item,
@@ -342,88 +389,91 @@ function VideoListItem({
   onClick: () => void;
   onToggleFav: (id: string) => void;
 }) {
+  const [hoverPos, setHoverPos] = useState<{ top: number; left: number } | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseEnter = () => {
+    if (item.type === "file") return;
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      hoverTimerRef.current = setTimeout(() => {
+        setHoverPos({ top: rect.top, left: rect.right + 10 });
+      }, 280);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHoverPos(null);
+  };
+
   return (
-    <div
-      className={`w-full flex gap-2.5 p-2 rounded-lg text-left group transition-all hover:bg-secondary/60 relative ${
-        isActive ? "bg-secondary border border-border" : ""
-      }`}
-    >
-      {/* Thumbnail pequeño — clic para reproducir */}
-      <button
-        onClick={onClick}
-        data-testid={`video-item-${item.id}`}
-        className="w-20 h-12 flex-shrink-0 rounded overflow-hidden"
-      >
-        <VideoThumbnail item={item} size="sm" />
-      </button>
-
-      {/* Info — clic para reproducir */}
-      <button onClick={onClick} className="flex-1 min-w-0 text-left">
-        <p className={`text-xs font-medium truncate leading-tight ${isActive ? "text-primary" : "text-foreground/90"}`}>
-          {item.name}
-        </p>
-        <p className="text-[10px] text-muted-foreground mt-0.5">{item.folder}</p>
-        <p className="text-[10px] text-muted-foreground font-mono">{item.duration}</p>
-      </button>
-
-      {/* Botón estrella — favorito */}
-      <button
-        onClick={(e) => { e.stopPropagation(); onToggleFav(item.id); }}
-        data-testid={`fav-btn-${item.id}`}
-        title={isFav ? "Quitar de Favoritos" : "Agregar a Favoritos"}
-        className={`absolute top-1.5 right-1.5 p-0.5 rounded transition-all opacity-0 group-hover:opacity-100 ${
-          isFav
-            ? "opacity-100 text-yellow-400 hover:text-yellow-300"
-            : "text-muted-foreground hover:text-yellow-400"
+    <>
+      <div
+        ref={containerRef}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        className={`w-full flex gap-2.5 p-2 rounded-lg text-left group transition-all hover:bg-secondary/60 relative ${
+          isActive ? "bg-secondary border border-border" : ""
         }`}
       >
-        <Star className={`w-3 h-3 ${isFav ? "fill-yellow-400" : ""}`} />
-      </button>
-    </div>
-  );
-}
+        {/* Thumbnail pequeño — clic para reproducir */}
+        <button
+          onClick={onClick}
+          data-testid={`video-item-${item.id}`}
+          className="w-20 h-12 flex-shrink-0 rounded overflow-hidden"
+        >
+          <VideoThumbnail item={item} size="sm" />
+        </button>
 
-/* ================================================================
- * COMPONENTE: VideoQueueCard — tarjeta de vista previa en cola
- * Más grande, para el panel desplegable inferior
- * ================================================================ */
-function VideoQueueCard({
-  item,
-  isActive,
-  onClick,
-}: {
-  item: VideoItem;
-  isActive: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      data-testid={`queue-card-${item.id}`}
-      className={`flex flex-col text-left group rounded-xl overflow-hidden border transition-all hover:border-primary/50 hover:shadow-lg hover:-translate-y-0.5 ${
-        isActive
-          ? "border-primary bg-primary/10"
-          : "border-border bg-card"
-      }`}
-    >
-      {/* Thumbnail grande */}
-      <div className="h-24 w-full group">
-        <VideoThumbnail item={item} size="md" />
+        {/* Info — clic para reproducir */}
+        <button onClick={onClick} className="flex-1 min-w-0 text-left">
+          <p className={`text-xs font-medium truncate leading-tight ${isActive ? "text-primary" : "text-foreground/90"}`}>
+            {item.name}
+          </p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">{item.folder}</p>
+          <p className="text-[10px] text-muted-foreground font-mono">{item.duration}</p>
+        </button>
+
+        {/* Botón estrella — favorito */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleFav(item.id); }}
+          data-testid={`fav-btn-${item.id}`}
+          title={isFav ? "Quitar de Favoritos" : "Agregar a Favoritos"}
+          className={`absolute top-1.5 right-1.5 p-0.5 rounded transition-all opacity-0 group-hover:opacity-100 ${
+            isFav
+              ? "opacity-100 text-yellow-400 hover:text-yellow-300"
+              : "text-muted-foreground hover:text-yellow-400"
+          }`}
+        >
+          <Star className={`w-3 h-3 ${isFav ? "fill-yellow-400" : ""}`} />
+        </button>
       </div>
-      {/* Info */}
-      <div className="p-2 space-y-0.5">
-        <p className={`text-xs font-semibold truncate leading-tight ${isActive ? "text-primary" : "text-foreground/90"}`}>
-          {item.name}
-        </p>
-        <p className="text-[10px] text-muted-foreground truncate">{item.folder}</p>
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-mono text-muted-foreground">{item.duration}</span>
-          {item.type === "audio"
-            ? <Music className="w-3 h-3 text-purple-400" />
-            : <Video className="w-3 h-3 text-cyan-400" />}
+
+      {/* Preview flotante — aparece a la derecha del panel */}
+      {hoverPos && (
+        <div
+          className="fixed z-[100] w-52 bg-card border border-border rounded-xl shadow-2xl overflow-hidden pointer-events-none animate-in fade-in-0 zoom-in-95 duration-150"
+          style={{ top: hoverPos.top, left: hoverPos.left }}
+        >
+          {item.type === "video" ? (
+            <HoverVideoPreview item={item} />
+          ) : (
+            <div className="p-3 flex items-center gap-3">
+              <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-purple-500/30 to-indigo-500/30 flex items-center justify-center border border-purple-500/20 flex-shrink-0">
+                <Music className="w-6 h-6 text-purple-400" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold truncate">{item.name}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{item.folder}</p>
+                <p className="text-[10px] font-mono text-muted-foreground mt-0.5">{item.duration}</p>
+              </div>
+            </div>
+          )}
         </div>
-      </div>
-    </button>
+      )}
+    </>
   );
 }
 
@@ -443,8 +493,6 @@ export default function Player() {
   /* ── Layout: paneles visibles ── */
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [showLeftPanel, setShowLeftPanel] = useState(true);
-  const [showQueue, setShowQueue] = useState(false);
-  const [queuePage, setQueuePage] = useState(0);
 
   /* ── Aspecto / relación del video ── */
   const [videoFit, setVideoFit] = useState<"contain" | "cover" | "fill">("contain");
@@ -538,12 +586,6 @@ export default function Player() {
     [videoList, favoriteVideoIds]
   );
 
-  /* ── Paginación de la cola ── */
-  const totalPages = Math.ceil(filteredVideos.length / ITEMS_PER_PAGE);
-  const queuePageItems = filteredVideos.slice(
-    queuePage * ITEMS_PER_PAGE,
-    queuePage * ITEMS_PER_PAGE + ITEMS_PER_PAGE
-  );
 
   /* ================================================================
    * EFECTO: verificar sesión activa al cargar la app
@@ -1215,7 +1257,7 @@ export default function Player() {
                   {(["all", "video", "audio"] as const).map(f => (
                     <button
                       key={f}
-                      onClick={() => { setVideoListFilter(f); setQueuePage(0); }}
+                      onClick={() => setVideoListFilter(f)}
                       data-testid={`filter-${f}`}
                       className={`flex-1 text-[11px] py-1 rounded transition-colors font-medium ${
                         videoListFilter === f
@@ -1570,22 +1612,6 @@ export default function Player() {
                   data-testid="slider-volume"
                 />
 
-                {/* Toggle cola de reproducción */}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant={showQueue ? "secondary" : "ghost"}
-                      size="icon"
-                      onClick={() => setShowQueue(!showQueue)}
-                      className="h-8 w-8"
-                      data-testid="button-toggle-queue"
-                    >
-                      <List className="w-3.5 h-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{showQueue ? "Ocultar cola" : "Mostrar cola"}</TooltipContent>
-                </Tooltip>
-
                 {/* Modo segmento */}
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1633,76 +1659,6 @@ export default function Player() {
             </div>
           </div>
 
-          {/* ── COLA DE REPRODUCCIÓN — panel desplegable ── */}
-          {showQueue && (
-            <div className="border-t border-border bg-card/50 backdrop-blur-sm">
-              {/* Encabezado de la cola */}
-              <div className="flex items-center justify-between px-4 py-2 border-b border-border/50">
-                <div className="flex items-center gap-2">
-                  <List className="w-4 h-4 text-primary" />
-                  <span className="text-sm font-medium">Cola de reproducción</span>
-                  <Badge variant="secondary" className="text-[10px]">
-                    {filteredVideos.length} archivos
-                  </Badge>
-                </div>
-                {/* Paginación */}
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-muted-foreground hidden sm:block">
-                    Pág. {queuePage + 1}/{totalPages}
-                  </span>
-                  <Button
-                    variant="ghost" size="icon"
-                    onClick={() => setQueuePage(p => Math.max(0, p - 1))}
-                    disabled={queuePage === 0}
-                    className="h-7 w-7"
-                    data-testid="button-queue-prev"
-                  >
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost" size="icon"
-                    onClick={() => setQueuePage(p => Math.min(totalPages - 1, p + 1))}
-                    disabled={queuePage >= totalPages - 1}
-                    className="h-7 w-7"
-                    data-testid="button-queue-next"
-                  >
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={() => setShowQueue(false)} className="h-7 w-7">
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
-              </div>
-
-              {/* Cuadrícula de vistas previas */}
-              <div className="p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 overflow-y-auto max-h-64">
-                {queuePageItems.map(item => (
-                  <VideoQueueCard
-                    key={item.id}
-                    item={item}
-                    isActive={activeVideoId === item.id}
-                    onClick={() => selectVideoItem(item)}
-                  />
-                ))}
-              </div>
-
-              {/* Indicadores de página */}
-              <div className="flex justify-center gap-1 pb-2">
-                {Array.from({ length: totalPages }).map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setQueuePage(i)}
-                    data-testid={`queue-page-${i}`}
-                    className={`rounded-full transition-all ${
-                      i === queuePage
-                        ? "w-4 h-1.5 bg-primary"
-                        : "w-1.5 h-1.5 bg-border hover:bg-muted-foreground"
-                    }`}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
         </main>
 
         {/* ─────────────────────────────────────────────────────────
