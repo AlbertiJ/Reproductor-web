@@ -25,7 +25,7 @@ import {
   Sun, Moon, Star, StarOff, HardDrive, Heart, List,
   ChevronLeft, ChevronUp, Play as PlayIcon, LayoutGrid,
   Ratio, Expand, Shrink, Users, UserPlus, Trash2, Pencil,
-  ShieldCheck, ShieldOff, FolderLock,
+  ShieldCheck, ShieldOff, FolderLock, X,
 } from "lucide-react";
 import { SiWhatsapp, SiTelegram, SiFacebook, SiInstagram } from "react-icons/si";
 import { Button } from "@/components/ui/button";
@@ -565,6 +565,12 @@ export default function Player() {
   /* ── Pestaña del explorador de directorios ── */
   const [libraryTab, setLibraryTab] = useState<"disk" | "favorites">("disk");
 
+  /* ── Filtro de carpeta activo en la Biblioteca izquierda (null = todas) ── */
+  const [folderFilter, setFolderFilter] = useState<string | null>(null);
+
+  /* ── Filtro de subcarpeta en pestaña Favoritos izquierda (null = todos) ── */
+  const [favFolderFilter, setFavFolderFilter] = useState<string | null>(null);
+
   /* ── Grabación ── */
   const [segmentStart, setSegmentStart] = useState(0);
   const [segmentEnd, setSegmentEnd] = useState(0);
@@ -576,14 +582,28 @@ export default function Player() {
   /* ── Lista de videos activa (panel izquierdo) ── */
   const [videoListFilter, setVideoListFilter] = useState<"all" | "video" | "audio">("all");
   const filteredVideos = useMemo(() => {
-    if (videoListFilter === "all") return videoList;
-    return videoList.filter(v => v.type === videoListFilter);
-  }, [videoList, videoListFilter]);
+    let list = videoList;
+    if (folderFilter) list = list.filter(v => v.path.startsWith(folderFilter + "/") || v.path === folderFilter);
+    if (videoListFilter !== "all") list = list.filter(v => v.type === videoListFilter);
+    return list;
+  }, [videoList, videoListFilter, folderFilter]);
 
   /* ── Videos favoritos del panel izquierdo (derivado de favoriteVideoIds) ── */
   const favoriteVideos = useMemo(
     () => videoList.filter(v => favoriteVideoIds.has(v.id)),
     [videoList, favoriteVideoIds]
+  );
+
+  /* ── Favoritos filtrados por subcarpeta (pestaña ★ del panel izquierdo) ── */
+  const filteredFavoriteVideos = useMemo(() => {
+    if (!favFolderFilter) return favoriteVideos;
+    return favoriteVideos.filter(v => v.folder === favFolderFilter);
+  }, [favoriteVideos, favFolderFilter]);
+
+  /* ── Nombres de carpeta únicos entre los archivos favoritos ── */
+  const favFolderNames = useMemo(
+    () => [...new Set(favoriteVideos.map(v => v.folder))].sort(),
+    [favoriteVideos]
   );
 
 
@@ -916,12 +936,16 @@ export default function Player() {
    * FAVORITOS — agregar carpeta a favoritos
    * ================================================================ */
   const addToFavorites = (node: FileNode) => {
-    if (favorites.find(f => f.id === node.id)) {
-      toast({ title: "Ya está en Favoritos", description: node.name });
-      return;
+    if (!favorites.find(f => f.id === node.id)) {
+      setFavorites(prev => [...prev, { ...node, isFavorite: true }]);
     }
-    setFavorites(prev => [...prev, { ...node, isFavorite: true }]);
-    toast({ title: "Agregado a Favoritos", description: node.name });
+    /* Navegar: panel derecho → pestaña Favoritos;
+       panel izquierdo → Biblioteca filtrada por esta carpeta */
+    setLibraryTab("favorites");
+    setFolderFilter(node.path);
+    setVideoListFilter("all");
+    setLeftTab("library");
+    toast({ title: "★ Favorito", description: node.name });
   };
 
   const removeFromFavorites = (id: string) => {
@@ -1252,6 +1276,23 @@ export default function Player() {
             {/* ══════════════ PESTAÑA: BIBLIOTECA ══════════════ */}
             {leftTab === "library" && (
               <>
+                {/* Chip de carpeta activa — aparece cuando hay folderFilter */}
+                {folderFilter && (
+                  <div className="flex items-center gap-1.5 px-2 py-1.5 bg-primary/10 border-b border-primary/20 flex-shrink-0">
+                    <FolderOpen className="w-3 h-3 text-primary flex-shrink-0" />
+                    <span className="text-[10px] text-primary font-medium truncate flex-1">
+                      {folderFilter.split("/").filter(Boolean).pop() ?? folderFilter}
+                    </span>
+                    <button
+                      onClick={() => setFolderFilter(null)}
+                      title="Mostrar toda la biblioteca"
+                      className="text-primary/60 hover:text-primary flex-shrink-0"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Filtro de tipo */}
                 <div className="flex border-b border-border px-2 py-1.5 gap-1 flex-shrink-0">
                   {(["all", "video", "audio"] as const).map(f => (
@@ -1301,12 +1342,35 @@ export default function Player() {
             {/* ══════════════ PESTAÑA: FAVORITOS ══════════════ */}
             {leftTab === "favorites" && (
               <>
-                {/* Encabezado */}
-                <div className="px-3 py-2 border-b border-border flex-shrink-0">
-                  <p className="text-[10px] text-muted-foreground">
-                    Archivos marcados con ★ en la Biblioteca
-                  </p>
-                </div>
+                {/* Filtro de subcarpeta — solo si hay archivos favoritos de más de una carpeta */}
+                {favFolderNames.length > 1 && (
+                  <div className="flex gap-1 px-2 py-1.5 border-b border-border flex-shrink-0 overflow-x-auto no-scrollbar">
+                    <button
+                      onClick={() => setFavFolderFilter(null)}
+                      className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full transition-colors font-medium ${
+                        favFolderFilter === null
+                          ? "bg-yellow-400 text-black"
+                          : "text-muted-foreground hover:text-foreground bg-secondary/50"
+                      }`}
+                    >
+                      Todos
+                    </button>
+                    {favFolderNames.map(folder => (
+                      <button
+                        key={folder}
+                        onClick={() => setFavFolderFilter(folder)}
+                        className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full transition-colors font-medium truncate max-w-[100px] ${
+                          favFolderFilter === folder
+                            ? "bg-yellow-400 text-black"
+                            : "text-muted-foreground hover:text-foreground bg-secondary/50"
+                        }`}
+                        title={folder}
+                      >
+                        {folder}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <div className="flex-1 overflow-y-auto no-scrollbar">
                   {favoriteVideos.length === 0 ? (
@@ -1328,10 +1392,21 @@ export default function Player() {
                         Ir a Biblioteca
                       </button>
                     </div>
+                  ) : filteredFavoriteVideos.length === 0 ? (
+                    /* Subfiltro activo sin resultados */
+                    <div className="flex flex-col items-center justify-center h-full gap-2 px-4 text-center">
+                      <Star className="w-6 h-6 text-yellow-400/30" />
+                      <p className="text-xs text-muted-foreground">
+                        No hay favoritos en <span className="font-medium text-foreground/70">{favFolderFilter}</span>
+                      </p>
+                      <button onClick={() => setFavFolderFilter(null)} className="text-[10px] text-primary hover:underline">
+                        Ver todos
+                      </button>
+                    </div>
                   ) : (
-                    /* Lista de favoritos */
+                    /* Lista de favoritos filtrada */
                     <div className="p-2 space-y-0.5">
-                      {favoriteVideos.map(item => (
+                      {filteredFavoriteVideos.map(item => (
                         <VideoListItem
                           key={item.id}
                           item={item}
@@ -1345,11 +1420,12 @@ export default function Player() {
                   )}
                 </div>
 
-                {/* Pie: acciones */}
+                {/* Pie: conteo + limpiar */}
                 {favoriteVideos.length > 0 && (
                   <div className="px-3 py-2 border-t border-border flex-shrink-0 flex items-center justify-between">
                     <p className="text-[10px] text-yellow-400 font-medium">
-                      ★ {favoriteVideos.length} {favoriteVideos.length === 1 ? "favorito" : "favoritos"}
+                      ★ {filteredFavoriteVideos.length}
+                      {favFolderFilter ? ` en ${favFolderFilter}` : ` de ${favoriteVideos.length}`}
                     </p>
                     <button
                       onClick={() => setFavoriteVideoIds(new Set())}
@@ -1771,14 +1847,27 @@ export default function Player() {
                         ) : (
                           <div className="space-y-1.5">
                             {favorites.map(fav => (
-                              <div key={fav.id} className="flex items-center gap-2 p-2 rounded-lg bg-card border border-border group">
-                                <FolderOpen className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+                              <div
+                                key={fav.id}
+                                className={`flex items-center gap-2 p-2 rounded-lg border group transition-all cursor-pointer hover:border-primary/40 hover:bg-primary/5 ${
+                                  folderFilter === fav.path
+                                    ? "bg-primary/10 border-primary/40"
+                                    : "bg-card border-border"
+                                }`}
+                                onClick={() => {
+                                  setFolderFilter(fav.path);
+                                  setVideoListFilter("all");
+                                  setLeftTab("library");
+                                }}
+                                title={`Cargar archivos de ${fav.name} en Biblioteca`}
+                              >
+                                <FolderOpen className={`w-4 h-4 flex-shrink-0 ${folderFilter === fav.path ? "text-primary" : "text-yellow-400"}`} />
                                 <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-medium truncate">{fav.name}</p>
+                                  <p className={`text-xs font-medium truncate ${folderFilter === fav.path ? "text-primary" : ""}`}>{fav.name}</p>
                                   <p className="text-[10px] text-muted-foreground truncate font-mono">{fav.path}</p>
                                 </div>
                                 <button
-                                  onClick={() => removeFromFavorites(fav.id)}
+                                  onClick={(e) => { e.stopPropagation(); removeFromFavorites(fav.id); if (folderFilter === fav.path) setFolderFilter(null); }}
                                   className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive flex-shrink-0"
                                   title="Quitar de Favoritos"
                                   data-testid={`remove-fav-${fav.id}`}
