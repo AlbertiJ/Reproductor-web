@@ -72,7 +72,7 @@ fi
 # pnpm debe correr desde la raíz para resolver los catalog: y workspace:
 echo ""
 echo "Instalando dependencias del workspace (puede tardar la primera vez)..."
-(cd "$REPO_ROOT" && pnpm install --frozen-lockfile 2>/dev/null || pnpm install)
+(cd "$REPO_ROOT" && pnpm install --no-frozen-lockfile)
 
 # ── Compilar el reproductor con Vite ─────────────────────────────
 echo ""
