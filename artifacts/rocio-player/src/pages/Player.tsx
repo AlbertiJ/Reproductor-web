@@ -335,33 +335,54 @@ function FileTreeNode({
 function VideoListItem({
   item,
   isActive,
+  isFav,
   onClick,
+  onToggleFav,
 }: {
   item: VideoItem;
   isActive: boolean;
+  isFav: boolean;
   onClick: () => void;
+  onToggleFav: (id: string) => void;
 }) {
   return (
-    <button
-      onClick={onClick}
-      data-testid={`video-item-${item.id}`}
-      className={`w-full flex gap-2.5 p-2 rounded-lg text-left group transition-all hover:bg-secondary/60 ${
+    <div
+      className={`w-full flex gap-2.5 p-2 rounded-lg text-left group transition-all hover:bg-secondary/60 relative ${
         isActive ? "bg-secondary border border-border" : ""
       }`}
     >
-      {/* Thumbnail pequeño */}
-      <div className="w-20 h-12 flex-shrink-0 rounded overflow-hidden group">
+      {/* Thumbnail pequeño — clic para reproducir */}
+      <button
+        onClick={onClick}
+        data-testid={`video-item-${item.id}`}
+        className="w-20 h-12 flex-shrink-0 rounded overflow-hidden"
+      >
         <VideoThumbnail item={item} size="sm" />
-      </div>
-      {/* Info */}
-      <div className="flex-1 min-w-0">
+      </button>
+
+      {/* Info — clic para reproducir */}
+      <button onClick={onClick} className="flex-1 min-w-0 text-left">
         <p className={`text-xs font-medium truncate leading-tight ${isActive ? "text-primary" : "text-foreground/90"}`}>
           {item.name}
         </p>
         <p className="text-[10px] text-muted-foreground mt-0.5">{item.folder}</p>
         <p className="text-[10px] text-muted-foreground font-mono">{item.duration}</p>
-      </div>
-    </button>
+      </button>
+
+      {/* Botón estrella — favorito */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onToggleFav(item.id); }}
+        data-testid={`fav-btn-${item.id}`}
+        title={isFav ? "Quitar de Favoritos" : "Agregar a Favoritos"}
+        className={`absolute top-1.5 right-1.5 p-0.5 rounded transition-all opacity-0 group-hover:opacity-100 ${
+          isFav
+            ? "opacity-100 text-yellow-400 hover:text-yellow-300"
+            : "text-muted-foreground hover:text-yellow-400"
+        }`}
+      >
+        <Star className={`w-3 h-3 ${isFav ? "fill-yellow-400" : ""}`} />
+      </button>
+    </div>
   );
 }
 
@@ -453,8 +474,14 @@ export default function Player() {
   /* ── Árbol de directorios (disco raíz) ── */
   const [diskTree, setDiskTree] = useState<FileNode[]>(DISK_ROOT);
 
-  /* ── Favoritos: carpetas marcadas como favoritas ── */
+  /* ── Favoritos: carpetas marcadas como favoritas (panel derecho) ── */
   const [favorites, setFavorites] = useState<FileNode[]>([]);
+
+  /* ── Favoritos de videos individuales (panel izquierdo) ── */
+  const [favoriteVideoIds, setFavoriteVideoIds] = useState<Set<string>>(new Set());
+
+  /* ── Pestaña del panel izquierdo: biblioteca o favoritos de video ── */
+  const [leftTab, setLeftTab] = useState<"library" | "favorites">("library");
 
   /* ── Pestaña activa del panel derecho ── */
   const [rightTab, setRightTab] = useState<"library" | "favorites" | "url" | "segment" | "share">("library");
@@ -476,6 +503,12 @@ export default function Player() {
     if (videoListFilter === "all") return DEMO_VIDEOS;
     return DEMO_VIDEOS.filter(v => v.type === videoListFilter);
   }, [videoListFilter]);
+
+  /* ── Videos favoritos del panel izquierdo (derivado de favoriteVideoIds) ── */
+  const favoriteVideos = useMemo(
+    () => DEMO_VIDEOS.filter(v => favoriteVideoIds.has(v.id)),
+    [favoriteVideoIds]
+  );
 
   /* ── Paginación de la cola ── */
   const totalPages = Math.ceil(filteredVideos.length / ITEMS_PER_PAGE);
@@ -694,6 +727,26 @@ export default function Player() {
   };
 
   /* ================================================================
+   * FAVORITOS DE VIDEOS — panel izquierdo
+   * Toggle individual: agregar o quitar un video de favoritos
+   * ================================================================ */
+  const toggleVideoFavorite = useCallback((id: string) => {
+    setFavoriteVideoIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        const item = DEMO_VIDEOS.find(v => v.id === id);
+        toast({ title: "Quitado de Favoritos", description: item?.name });
+      } else {
+        next.add(id);
+        const item = DEMO_VIDEOS.find(v => v.id === id);
+        toast({ title: "Agregado a Favoritos", description: item?.name });
+      }
+      return next;
+    });
+  }, [toast]);
+
+  /* ================================================================
    * GRABACIÓN POR SEGMENTO
    * ================================================================ */
   const markSegmentStart = () => {
@@ -848,48 +901,161 @@ export default function Player() {
       <div className="flex flex-1 overflow-hidden">
 
         {/* ─────────────────────────────────────────────────────────
-         * PANEL IZQUIERDO — Lista de videos estilo YouTube
+         * PANEL IZQUIERDO — Biblioteca + Favoritos de archivos
          * ───────────────────────────────────────────────────────── */}
         {showLeftPanel && (
           <aside className="w-64 border-r border-border bg-sidebar flex flex-col overflow-hidden flex-shrink-0">
-            {/* Filtro de tipo */}
-            <div className="flex border-b border-border px-2 py-1.5 gap-1">
-              {(["all", "video", "audio"] as const).map(f => (
-                <button
-                  key={f}
-                  onClick={() => { setVideoListFilter(f); setQueuePage(0); }}
-                  data-testid={`filter-${f}`}
-                  className={`flex-1 text-[11px] py-1 rounded transition-colors font-medium ${
-                    videoListFilter === f
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-                  }`}
-                >
-                  {f === "all" ? "Todo" : f === "video" ? "Video" : "Audio"}
-                </button>
-              ))}
+
+            {/* ── Pestañas principales: Biblioteca / Favoritos ── */}
+            <div className="flex border-b border-border flex-shrink-0">
+              <button
+                onClick={() => setLeftTab("library")}
+                data-testid="left-tab-library"
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-semibold transition-colors border-b-2 ${
+                  leftTab === "library"
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <LayoutGrid className="w-3 h-3" /> Biblioteca
+              </button>
+              <button
+                onClick={() => setLeftTab("favorites")}
+                data-testid="left-tab-favorites"
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-semibold transition-colors border-b-2 ${
+                  leftTab === "favorites"
+                    ? "border-yellow-400 text-yellow-400"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Star className={`w-3 h-3 ${leftTab === "favorites" ? "fill-yellow-400" : ""}`} />
+                Favoritos
+                {favoriteVideoIds.size > 0 && (
+                  <span className={`text-[9px] rounded-full w-4 h-4 flex items-center justify-center font-bold ${
+                    leftTab === "favorites"
+                      ? "bg-yellow-400 text-black"
+                      : "bg-muted text-muted-foreground"
+                  }`}>
+                    {favoriteVideoIds.size}
+                  </span>
+                )}
+              </button>
             </div>
 
-            {/* Lista de videos */}
-            <div className="flex-1 overflow-y-auto no-scrollbar">
-              <div className="p-2 space-y-0.5">
-                {filteredVideos.map(item => (
-                  <VideoListItem
-                    key={item.id}
-                    item={item}
-                    isActive={activeVideoId === item.id}
-                    onClick={() => selectVideoItem(item)}
-                  />
-                ))}
-              </div>
-            </div>
+            {/* ══════════════ PESTAÑA: BIBLIOTECA ══════════════ */}
+            {leftTab === "library" && (
+              <>
+                {/* Filtro de tipo */}
+                <div className="flex border-b border-border px-2 py-1.5 gap-1 flex-shrink-0">
+                  {(["all", "video", "audio"] as const).map(f => (
+                    <button
+                      key={f}
+                      onClick={() => { setVideoListFilter(f); setQueuePage(0); }}
+                      data-testid={`filter-${f}`}
+                      className={`flex-1 text-[11px] py-1 rounded transition-colors font-medium ${
+                        videoListFilter === f
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`}
+                    >
+                      {f === "all" ? "Todo" : f === "video" ? "Video" : "Audio"}
+                    </button>
+                  ))}
+                </div>
 
-            {/* Total */}
-            <div className="px-3 py-2 border-t border-border">
-              <p className="text-[10px] text-muted-foreground text-center">
-                {filteredVideos.length} {filteredVideos.length === 1 ? "archivo" : "archivos"}
-              </p>
-            </div>
+                {/* Lista de videos */}
+                <div className="flex-1 overflow-y-auto no-scrollbar">
+                  <div className="p-2 space-y-0.5">
+                    {filteredVideos.map(item => (
+                      <VideoListItem
+                        key={item.id}
+                        item={item}
+                        isActive={activeVideoId === item.id}
+                        isFav={favoriteVideoIds.has(item.id)}
+                        onClick={() => selectVideoItem(item)}
+                        onToggleFav={toggleVideoFavorite}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Pie: total */}
+                <div className="px-3 py-2 border-t border-border flex-shrink-0">
+                  <p className="text-[10px] text-muted-foreground text-center">
+                    {filteredVideos.length} {filteredVideos.length === 1 ? "archivo" : "archivos"}
+                    {favoriteVideoIds.size > 0 && (
+                      <span className="ml-1 text-yellow-400">· ★ {favoriteVideoIds.size}</span>
+                    )}
+                  </p>
+                </div>
+              </>
+            )}
+
+            {/* ══════════════ PESTAÑA: FAVORITOS ══════════════ */}
+            {leftTab === "favorites" && (
+              <>
+                {/* Encabezado */}
+                <div className="px-3 py-2 border-b border-border flex-shrink-0">
+                  <p className="text-[10px] text-muted-foreground">
+                    Archivos marcados con ★ en la Biblioteca
+                  </p>
+                </div>
+
+                <div className="flex-1 overflow-y-auto no-scrollbar">
+                  {favoriteVideos.length === 0 ? (
+                    /* Estado vacío */
+                    <div className="flex flex-col items-center justify-center h-full gap-3 px-4 text-center">
+                      <div className="w-14 h-14 rounded-full bg-yellow-400/10 flex items-center justify-center border border-yellow-400/20">
+                        <Star className="w-7 h-7 text-yellow-400/40" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-foreground/70 mb-1">Sin favoritos aún</p>
+                        <p className="text-[10px] text-muted-foreground leading-relaxed">
+                          Pasa el cursor sobre cualquier archivo en Biblioteca y haz clic en ★ para guardarlo aquí.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setLeftTab("library")}
+                        className="text-[11px] text-primary hover:underline"
+                      >
+                        Ir a Biblioteca
+                      </button>
+                    </div>
+                  ) : (
+                    /* Lista de favoritos */
+                    <div className="p-2 space-y-0.5">
+                      {favoriteVideos.map(item => (
+                        <VideoListItem
+                          key={item.id}
+                          item={item}
+                          isActive={activeVideoId === item.id}
+                          isFav={true}
+                          onClick={() => selectVideoItem(item)}
+                          onToggleFav={toggleVideoFavorite}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Pie: acciones */}
+                {favoriteVideos.length > 0 && (
+                  <div className="px-3 py-2 border-t border-border flex-shrink-0 flex items-center justify-between">
+                    <p className="text-[10px] text-yellow-400 font-medium">
+                      ★ {favoriteVideos.length} {favoriteVideos.length === 1 ? "favorito" : "favoritos"}
+                    </p>
+                    <button
+                      onClick={() => setFavoriteVideoIds(new Set())}
+                      className="text-[10px] text-muted-foreground hover:text-destructive transition-colors"
+                      data-testid="clear-all-favs"
+                    >
+                      Limpiar todo
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
           </aside>
         )}
 
