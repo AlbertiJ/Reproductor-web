@@ -1,51 +1,66 @@
 # Rocio — Servidor Python
 
-Servidor backend para el reproductor multimedia Rocio.
+  Servidor backend local para el reproductor multimedia Rocio.
+  Sirve archivos de video/audio, permite descargar con yt-dlp y recortar segmentos con ffmpeg.
 
-## Instalación rápida
+  ## Instalación
 
-```bash
-pip install -r requirements.txt
-```
-
-## Uso
-
-```bash
-# Modo básico (sirve tu carpeta home)
-python server.py
-
-# Puerto y directorio personalizados
-python server.py --port 8080 --dir /home/usuario/Videos
-
-# Accesible en red local (para otros dispositivos)
-python server.py --host 0.0.0.0 --port 5000
-
-# Modo debug
-python server.py --debug
-```
-
-## API Endpoints
-
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/health` | Estado del servidor y herramientas disponibles |
-| GET | `/api/tree?path=/Videos&depth=3` | Árbol de directorios en JSON |
-| GET | `/api/files?path=/Videos` | Lista archivos de una carpeta |
-| GET | `/api/media?path=/Videos/film.mp4` | Streaming del archivo (con soporte Range) |
-| POST | `/api/download` | Descargar video de YouTube/Vimeo |
-| POST | `/api/segment` | Recortar segmento de video con ffmpeg |
-
-## Herramientas opcionales
-
-- **yt-dlp**: Para descargar videos de YouTube, Vimeo y más de 1000 sitios
+  ### Opción 1 — Script automático (Linux/macOS)
   ```bash
-  pip install yt-dlp
+  bash setup.sh
   ```
-- **ffmpeg**: Para recortar segmentos de video
-  - Ubuntu/Debian: `sudo apt install ffmpeg`
-  - macOS: `brew install ffmpeg`
-  - Windows: https://ffmpeg.org/download.html
 
-## Nube
+  ### Opción 2 — Manual paso a paso
+  ```bash
+  # Instalar dependencias Python (usa pip3 con la bandera -r)
+  pip3 install -r requirements.txt
+  ```
 
-Para desplegar en la nube (AWS, GCP, Railway, etc.), usa `--host 0.0.0.0` y asegúrate de configurar las variables de entorno y un proxy reverso (nginx/caddy) con HTTPS.
+  > **Nota:** el comando es `pip3` (no `pip`) y necesita la bandera `-r` antes del archivo.
+
+  ### Instalar ffmpeg (opcional, para recorte de segmentos)
+  ```bash
+  # Ubuntu / Debian
+  sudo apt install ffmpeg
+
+  # macOS
+  brew install ffmpeg
+  ```
+
+  ## Iniciar el servidor
+
+  ```bash
+  python3 server.py
+  ```
+
+  ### Opciones disponibles
+  | Opción | Valor por defecto | Descripción |
+  |--------|------------------|-------------|
+  | `--port` | 5000 | Puerto del servidor |
+  | `--host` | 127.0.0.1 | Interfaz de red (usa 0.0.0.0 para red local) |
+  | `--dir` | /home/$USER | Directorio raíz de medios |
+  | `--debug` | — | Modo debug con recarga automática |
+
+  ### Ejemplos
+
+  ```bash
+  # Servir desde una carpeta de videos
+  python3 server.py --dir /home/usuario/Videos
+
+  # Accesible desde toda la red local
+  python3 server.py --host 0.0.0.0 --port 8080
+
+  # Modo desarrollo
+  python3 server.py --debug
+  ```
+
+  ## Endpoints de la API
+
+  | Método | Endpoint | Descripción |
+  |--------|---------|-------------|
+  | GET | `/api/tree` | Árbol de directorios en JSON |
+  | GET | `/api/stream?path=...` | Streaming de video/audio con Range |
+  | POST | `/api/download` | Descargar video de YouTube/Vimeo |
+  | POST | `/api/segment` | Recortar segmento con ffmpeg |
+  | GET | `/api/health` | Estado del servidor |
+  
