@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║  ROCIO — Servidor Backend en Python                              ║
-║  Servidor local / nube para el reproductor multimedia            ║
+║  ROCIO — Servidor Multimedia Local v2                            ║
 ║                                                                  ║
-║  Funcionalidades:                                                ║
-║    - Servir archivos de video y audio desde directorios locales  ║
-║    - API REST para listar directorios y archivos                 ║
-║    - Descarga de videos de YouTube y Vimeo (yt-dlp)             ║
-║    - Conversión de segmentos (recorte de video) con ffmpeg       ║
-║    - CORS habilitado para uso con el frontend en browser         ║
+║  Características:                                                ║
+║    - Autenticación usuario/clave (archivo rocio.conf)            ║
+║    - Registro de conexiones en connections.log                   ║
+║    - Modo segundo plano (--daemon) con control por PID           ║
+║    - Streaming de video/audio con HTTP Range                     ║
+║    - API REST para árbol de directorios                          ║
+║    - Descarga YouTube/Vimeo con yt-dlp                           ║
+║    - Recorte de segmentos con ffmpeg                             ║
 ║                                                                  ║
-║  Uso:                                                            ║
-║    pip install flask flask-cors yt-dlp                           ║
-║    python server.py                                              ║
-║    python server.py --port 8080 --dir /home/user/Videos          ║
+║  Uso rápido:                                                     ║
+║    python3 server.py                        (consola)            ║
+║    python3 server.py --daemon               (segundo plano)      ║
+║    python3 server.py --stop                 (detener demonio)    ║
+║    python3 server.py --dir /ruta/Videos                          ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
 # ─────────────────────────────────────────────────────────────────
 # BLOQUE 1: IMPORTACIONES
-# Bibliotecas estándar de Python + dependencias externas
 # ─────────────────────────────────────────────────────────────────
 import os
 import sys
@@ -30,81 +31,301 @@ import subprocess
 import tempfile
 import threading
 import logging
+import signal
+import hashlib
+import configparser
+import socket
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
+from functools import wraps
 
-# Flask: framework web ligero para la API REST
 from flask import (
-    Flask,
-    jsonify,
-    request,
-    send_file,
-    abort,
-    Response,
-    stream_with_context,
+    Flask, jsonify, request, send_file,
+    abort, Response, stream_with_context,
 )
-
-# Flask-CORS: permite solicitudes desde el frontend en el navegador
 from flask_cors import CORS
 
+
 # ─────────────────────────────────────────────────────────────────
-# BLOQUE 2: CONFIGURACIÓN GLOBAL
-# Parámetros por defecto y extensiones de medios soportadas
+# BLOQUE 2: RUTAS DE ARCHIVOS DEL SERVIDOR
+# Todos los archivos auxiliares viven junto al script
 # ─────────────────────────────────────────────────────────────────
 
-# Extensiones de video soportadas
+BASE_DIR       = Path(__file__).parent.resolve()
+CONFIG_FILE    = BASE_DIR / "rocio.conf"       # Credenciales (usuario/clave)
+CONN_LOG_FILE  = BASE_DIR / "connections.log"  # Registro de conexiones
+PID_FILE       = BASE_DIR / "rocio.pid"        # PID del proceso demonio
+SERVER_LOG     = BASE_DIR / "server.log"       # Log del servidor en modo demonio
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 3: CONFIGURACIÓN GLOBAL
+# ─────────────────────────────────────────────────────────────────
+
 VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".mov", ".webm",
     ".flv", ".wmv", ".m4v", ".ogv", ".ts",
 }
-
-# Extensiones de audio soportadas
 AUDIO_EXTENSIONS = {
     ".mp3", ".wav", ".flac", ".ogg", ".m4a",
     ".aac", ".wma", ".opus", ".aiff",
 }
 
-# Puerto por defecto del servidor
-DEFAULT_PORT = 5000
-
-# Directorio raíz por defecto para servir medios
+DEFAULT_PORT      = 5000
+DEFAULT_HOST      = "127.0.0.1"
 DEFAULT_MEDIA_DIR = str(Path.home())
 
-# Configurar logger para registro de eventos
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 4: GESTIÓN DEL ARCHIVO DE CONFIGURACIÓN (rocio.conf)
+#
+# El archivo rocio.conf se crea automáticamente si no existe.
+# Guarda el usuario y la contraseña hasheada con SHA-256.
+# NUNCA almacena la contraseña en texto plano.
+# ─────────────────────────────────────────────────────────────────
+
+def hash_password(password: str) -> str:
+    """Hashea la contraseña con SHA-256 para almacenamiento seguro."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def load_config() -> configparser.ConfigParser:
+    """
+    Carga rocio.conf. Si no existe, lo crea con valores por defecto.
+    La clave por defecto es 'rocio123' (hasheada).
+    """
+    config = configparser.ConfigParser()
+
+    if not CONFIG_FILE.exists():
+        # Crear configuración inicial con valores por defecto
+        config["auth"] = {
+            "username": "rocio",
+            "password_hash": hash_password("rocio123"),
+        }
+        config["server"] = {
+            "host": DEFAULT_HOST,
+            "port": str(DEFAULT_PORT),
+            "media_dir": DEFAULT_MEDIA_DIR,
+        }
+        with open(CONFIG_FILE, "w") as f:
+            config.write(f)
+        print(f"  ► Archivo de configuración creado: {CONFIG_FILE}")
+        print(f"  ► Usuario por defecto: rocio / Clave: rocio123")
+        print(f"  ► Cambia la clave ejecutando: python3 server.py --set-password")
+        print()
+
+    config.read(CONFIG_FILE)
+    return config
+
+
+def verify_credentials(username: str, password: str, config: configparser.ConfigParser) -> bool:
+    """Verifica usuario y contraseña contra el hash almacenado en rocio.conf."""
+    stored_user  = config.get("auth", "username", fallback="rocio")
+    stored_hash  = config.get("auth", "password_hash", fallback="")
+    input_hash   = hash_password(password)
+    user_ok  = username == stored_user
+    pass_ok  = input_hash == stored_hash
+    return user_ok and pass_ok
+
+
+def change_password(new_password: str, config: configparser.ConfigParser):
+    """Actualiza el hash de contraseña en rocio.conf."""
+    if "auth" not in config:
+        config["auth"] = {}
+    config["auth"]["password_hash"] = hash_password(new_password)
+    with open(CONFIG_FILE, "w") as f:
+        config.write(f)
+    print(f"✅ Contraseña actualizada en {CONFIG_FILE}")
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 5: REGISTRO DE CONEXIONES (connections.log)
+#
+# Cada solicitud a la API queda registrada con:
+#   - Fecha/hora
+#   - IP del cliente
+#   - Método HTTP y ruta
+#   - Código de respuesta
+#   - Usuario autenticado
+# ─────────────────────────────────────────────────────────────────
+
+def log_connection(ip: str, method: str, path: str, status: int, user: str = "-"):
+    """
+    Escribe una línea en connections.log con información de la conexión.
+    Formato: [2024-01-15 14:30:22] 192.168.1.5 rocio GET /api/tree 200
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {ip:15s} {user:10s} {method:6s} {path} → {status}\n"
+    try:
+        with open(CONN_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass  # No interrumpir el servidor por un fallo de log
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 6: MODO DEMONIO (segundo plano)
+#
+# --daemon: inicia el servidor en segundo plano (fork Unix)
+#           guarda el PID en rocio.pid
+# --stop:   lee rocio.pid y envía SIGTERM al proceso
+# ─────────────────────────────────────────────────────────────────
+
+def start_daemon(args):
+    """
+    Hace fork del proceso actual para ejecutar en segundo plano.
+    Solo funciona en sistemas Unix/Linux/macOS.
+    """
+    if not hasattr(os, "fork"):
+        print("ERROR: El modo demonio no está disponible en Windows.")
+        print("  Usa: python3 server.py  (sin --daemon)")
+        sys.exit(1)
+
+    # Primer fork: desconectar del proceso padre
+    pid = os.fork()
+    if pid > 0:
+        # Proceso padre: mostrar info y salir
+        print(f"✅ Servidor Rocio iniciado en segundo plano")
+        print(f"   PID: {pid}")
+        print(f"   Para detener: python3 server.py --stop")
+        print(f"   Log del servidor: {SERVER_LOG}")
+        sys.exit(0)
+
+    # Proceso hijo: crear nueva sesión
+    os.setsid()
+
+    # Segundo fork: evitar que el daemon adquiera una TTY
+    pid2 = os.fork()
+    if pid2 > 0:
+        sys.exit(0)
+
+    # Guardar PID del demonio
+    PID_FILE.write_text(str(os.getpid()))
+
+    # Redirigir stdin/stdout/stderr al log del servidor
+    sys.stdout.flush()
+    sys.stderr.flush()
+    with open(SERVER_LOG, "a") as log_fd:
+        fd = log_fd.fileno()
+        os.dup2(open(os.devnull, "r").fileno(), sys.stdin.fileno())
+        os.dup2(fd, sys.stdout.fileno())
+        os.dup2(fd, sys.stderr.fileno())
+
+
+def stop_daemon():
+    """
+    Lee el PID de rocio.pid y envía SIGTERM al proceso demonio.
+    """
+    if not PID_FILE.exists():
+        print("ERROR: No se encontró rocio.pid — ¿el servidor está corriendo?")
+        sys.exit(1)
+
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        os.kill(pid, signal.SIGTERM)
+        PID_FILE.unlink()
+        print(f"✅ Servidor Rocio detenido (PID {pid})")
+    except ProcessLookupError:
+        print(f"El proceso {pid} ya no existe. Limpiando rocio.pid...")
+        PID_FILE.unlink()
+    except ValueError:
+        print("ERROR: rocio.pid contiene un valor inválido.")
+        sys.exit(1)
+
+
+def cleanup_pid():
+    """Elimina rocio.pid al salir limpiamente."""
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+    except OSError:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 7: CONFIGURACIÓN DEL LOGGER
+# ─────────────────────────────────────────────────────────────────
+
+def setup_logger(daemon_mode: bool = False):
+    handlers = [logging.StreamHandler(sys.stdout)]
+    if daemon_mode:
+        handlers.append(logging.FileHandler(SERVER_LOG, encoding="utf-8"))
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=handlers,
+    )
+    return logging.getLogger("rocio")
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 8: INICIALIZACIÓN DE FLASK
+# ─────────────────────────────────────────────────────────────────
+
+app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# Variables globales (se asignan al arrancar)
+MEDIA_ROOT: str = DEFAULT_MEDIA_DIR
+CONFIG: configparser.ConfigParser = configparser.ConfigParser()
 logger = logging.getLogger("rocio")
 
 
 # ─────────────────────────────────────────────────────────────────
-# BLOQUE 3: INICIALIZACIÓN DE FLASK
-# Crear la aplicación y habilitar CORS
+# BLOQUE 9: DECORADOR DE AUTENTICACIÓN HTTP BASIC
+#
+# Protege todos los endpoints /api/* con usuario y contraseña.
+# Si la solicitud no incluye credenciales válidas → 401 Unauthorized.
 # ─────────────────────────────────────────────────────────────────
 
-app = Flask(__name__)
+def require_auth(f):
+    """
+    Decorador que exige autenticación HTTP Basic Auth.
+    Las credenciales se validan contra rocio.conf.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        ip   = request.remote_addr or "-"
 
-# Habilitar CORS para todos los orígenes (necesario para uso local)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+        if not auth or not verify_credentials(auth.username, auth.password, CONFIG):
+            # Registrar intento fallido
+            log_connection(ip, request.method, request.path, 401,
+                           user=auth.username if auth else "anon")
+            logger.warning(f"Auth fallida desde {ip} — usuario: {auth.username if auth else 'ninguno'}")
+            return Response(
+                json.dumps({"error": "Autenticación requerida"}),
+                status=401,
+                mimetype="application/json",
+                headers={"WWW-Authenticate": 'Basic realm="Rocio Servidor"'},
+            )
 
-# Variable global para el directorio raíz de medios
-MEDIA_ROOT: str = DEFAULT_MEDIA_DIR
+        # Inyectar usuario autenticado para logging
+        request.authenticated_user = auth.username
+        return f(*args, **kwargs)
+    return decorated
 
 
 # ─────────────────────────────────────────────────────────────────
-# BLOQUE 4: FUNCIONES AUXILIARES — Sistema de Archivos
-# Funciones para explorar y filtrar archivos de medios
+# BLOQUE 10: MIDDLEWARE — Registrar cada petición completada
+# ─────────────────────────────────────────────────────────────────
+
+@app.after_request
+def after_request_log(response):
+    """Registra en connections.log cada respuesta enviada."""
+    ip   = request.remote_addr or "-"
+    user = getattr(request, "authenticated_user", "-")
+    log_connection(ip, request.method, request.path, response.status_code, user)
+    return response
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 11: FUNCIONES AUXILIARES — Sistema de Archivos
 # ─────────────────────────────────────────────────────────────────
 
 def get_file_type(path: Path) -> str:
-    """
-    Determina el tipo de un archivo según su extensión.
-    Retorna: 'video', 'audio', 'folder' o 'file'
-    """
     if path.is_dir():
         return "folder"
     ext = path.suffix.lower()
@@ -116,47 +337,23 @@ def get_file_type(path: Path) -> str:
 
 
 def is_media_file(path: Path) -> bool:
-    """
-    Verifica si un archivo es de tipo video o audio.
-    Retorna True si la extensión coincide con las soportadas.
-    """
     ext = path.suffix.lower()
     return ext in VIDEO_EXTENSIONS or ext in AUDIO_EXTENSIONS
 
 
 def safe_path(base: str, relative: str) -> Optional[Path]:
-    """
-    Construye una ruta segura evitando path traversal (../).
-    Retorna None si la ruta sale del directorio base.
-    
-    Parámetros:
-        base: Directorio raíz permitido
-        relative: Ruta relativa solicitada por el cliente
-    """
+    """Previene path traversal (../) validando que la ruta esté dentro del directorio base."""
     base_path = Path(base).resolve()
-    # Combinar y resolver la ruta completa
     target = (base_path / relative.lstrip("/")).resolve()
-    # Verificar que la ruta resultante está dentro del directorio base
     try:
         target.relative_to(base_path)
         return target
     except ValueError:
-        return None  # Intento de path traversal detectado
+        return None
 
 
 def build_tree_node(path: Path, base: Path, max_depth: int = 3, depth: int = 0) -> dict:
-    """
-    Construye un nodo del árbol de directorios de forma recursiva.
-    
-    Parámetros:
-        path: Ruta del nodo actual
-        base: Ruta base para calcular rutas relativas
-        max_depth: Profundidad máxima de exploración
-        depth: Profundidad actual (inicio en 0)
-    
-    Retorna:
-        Diccionario con información del nodo y sus hijos (si es carpeta)
-    """
+    """Construye el árbol de directorios de forma recursiva."""
     rel = str(path.relative_to(base))
     node = {
         "id": rel,
@@ -165,81 +362,81 @@ def build_tree_node(path: Path, base: Path, max_depth: int = 3, depth: int = 0) 
         "path": "/" + rel,
         "checked": False,
     }
-
-    # Si es directorio y no se ha alcanzado la profundidad máxima, explorar hijos
     if path.is_dir() and depth < max_depth:
         children = []
         try:
-            # Ordenar: primero carpetas, luego archivos de medios
-            entries = sorted(
-                path.iterdir(),
-                key=lambda p: (not p.is_dir(), p.name.lower())
-            )
+            entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
             for entry in entries:
-                # Ignorar archivos ocultos y no-medios que no sean carpetas
                 if entry.name.startswith("."):
                     continue
                 if entry.is_file() and not is_media_file(entry):
                     continue
-                children.append(
-                    build_tree_node(entry, base, max_depth, depth + 1)
-                )
+                children.append(build_tree_node(entry, base, max_depth, depth + 1))
         except PermissionError:
-            pass  # Ignorar directorios sin permiso de lectura
-
+            pass
         node["children"] = children
-        node["isOpen"] = depth == 0  # Abrir solo el nivel raíz
-
+        node["isOpen"] = depth == 0
     return node
 
 
 # ─────────────────────────────────────────────────────────────────
-# BLOQUE 5: RUTAS DE LA API — Directorio y Árbol de Archivos
+# BLOQUE 12: RUTAS DE LA API
 # ─────────────────────────────────────────────────────────────────
 
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    """
+    GET /api/health  — sin autenticación
+    Permite al plugin Firefox verificar si el servidor está activo.
+    """
+    has_ytdlp = has_ffmpeg = False
+    try:
+        subprocess.run(["yt-dlp", "--version"], capture_output=True, check=True)
+        has_ytdlp = True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        has_ffmpeg = True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return jsonify({
+        "status": "ok",
+        "version": "2.0.0",
+        "media_root": MEDIA_ROOT,
+        "tools": {"yt_dlp": has_ytdlp, "ffmpeg": has_ffmpeg},
+    })
+
+
 @app.route("/api/tree", methods=["GET"])
+@require_auth
 def get_tree():
     """
-    GET /api/tree
-    
-    Retorna el árbol de directorios desde el directorio raíz de medios.
-    Parámetros de query:
-        path (opcional): subdirectorio a explorar (relativo a MEDIA_ROOT)
-        depth (opcional): profundidad máxima (por defecto 3)
-    
-    Respuesta:
-        JSON con la lista de nodos del árbol
+    GET /api/tree?path=&depth=3
+    Retorna el árbol de directorios desde MEDIA_ROOT.
+    Requiere autenticación.
     """
-    relative = request.args.get("path", "")
+    relative  = request.args.get("path", "")
     max_depth = int(request.args.get("depth", 3))
-
-    # Construir ruta segura
     target = safe_path(MEDIA_ROOT, relative) if relative else Path(MEDIA_ROOT).resolve()
 
-    if not target or not target.exists():
+    if not target or not target.exists() or not target.is_dir():
         return jsonify({"error": "Directorio no encontrado"}), 404
-
-    if not target.is_dir():
-        return jsonify({"error": "La ruta no es un directorio"}), 400
 
     base = Path(MEDIA_ROOT).resolve()
     tree = build_tree_node(target, base, max_depth=max_depth)
-
-    logger.info(f"Árbol generado para: {target}")
+    logger.info(f"Árbol generado: {target}")
     return jsonify({"tree": tree})
 
 
 @app.route("/api/files", methods=["GET"])
+@require_auth
 def list_files():
     """
-    GET /api/files
-    
-    Lista archivos de medios en un directorio específico (sin recursión).
-    Parámetros de query:
-        path (opcional): subdirectorio (relativo a MEDIA_ROOT)
-    
-    Respuesta:
-        JSON con lista de archivos {name, type, path, size}
+    GET /api/files?path=
+    Lista archivos de medios en un directorio específico.
+    Requiere autenticación.
     """
     relative = request.args.get("path", "")
     target = safe_path(MEDIA_ROOT, relative) if relative else Path(MEDIA_ROOT).resolve()
@@ -255,15 +452,12 @@ def list_files():
             file_type = get_file_type(entry)
             if file_type not in ("video", "audio", "folder"):
                 continue
-
-            # Calcular tamaño en MB para archivos
             size_mb = None
             if entry.is_file():
                 try:
                     size_mb = round(entry.stat().st_size / (1024 * 1024), 2)
                 except OSError:
                     pass
-
             files.append({
                 "name": entry.name,
                 "type": file_type,
@@ -276,24 +470,13 @@ def list_files():
     return jsonify({"files": files, "count": len(files)})
 
 
-# ─────────────────────────────────────────────────────────────────
-# BLOQUE 6: RUTA — Streaming de Archivos de Medios
-# Servir archivos con soporte para HTTP Range (streaming parcial)
-# ─────────────────────────────────────────────────────────────────
-
 @app.route("/api/media", methods=["GET"])
+@require_auth
 def serve_media():
     """
     GET /api/media?path=/Videos/pelicula.mp4
-    
-    Sirve un archivo de video o audio con soporte para Range requests.
-    Esto permite que el navegador pueda saltar a cualquier posición del video.
-    
-    Parámetros de query:
-        path (requerido): ruta relativa al archivo (desde MEDIA_ROOT)
-    
-    Respuesta:
-        Contenido del archivo con headers apropiados (206 Partial Content si Range)
+    Sirve archivo de video/audio con soporte HTTP Range (streaming parcial).
+    Requiere autenticación.
     """
     relative = request.args.get("path", "")
     if not relative:
@@ -302,14 +485,10 @@ def serve_media():
     target = safe_path(MEDIA_ROOT, relative)
     if not target or not target.exists() or not target.is_file():
         return jsonify({"error": "Archivo no encontrado"}), 404
-
     if not is_media_file(target):
         return jsonify({"error": "Tipo de archivo no soportado"}), 415
 
-    # Obtener tamaño del archivo
     file_size = target.stat().st_size
-
-    # Detectar MIME type según extensión
     ext = target.suffix.lower()
     mime_map = {
         ".mp4": "video/mp4", ".mkv": "video/x-matroska",
@@ -317,33 +496,29 @@ def serve_media():
         ".mov": "video/quicktime", ".ogv": "video/ogg",
         ".mp3": "audio/mpeg", ".wav": "audio/wav",
         ".flac": "audio/flac", ".ogg": "audio/ogg",
-        ".m4a": "audio/mp4", ".aac": "audio/aac",
-        ".opus": "audio/opus",
+        ".m4a": "audio/mp4", ".aac": "audio/aac", ".opus": "audio/opus",
     }
     mime_type = mime_map.get(ext, "application/octet-stream")
 
-    # Procesar cabecera Range para streaming parcial
+    # Procesar HTTP Range para streaming parcial
     range_header = request.headers.get("Range")
     if range_header:
-        # Parsear el rango (ej: "bytes=0-1023")
-        byte_start = 0
-        byte_end = file_size - 1
+        byte_start, byte_end = 0, file_size - 1
         try:
             parts = range_header.replace("bytes=", "").split("-")
             byte_start = int(parts[0]) if parts[0] else 0
-            byte_end = int(parts[1]) if parts[1] else file_size - 1
+            byte_end   = int(parts[1]) if parts[1] else file_size - 1
         except (ValueError, IndexError):
             pass
 
         chunk_size = byte_end - byte_start + 1
 
-        # Generador de streaming parcial
         def generate_chunk():
             with open(target, "rb") as f:
                 f.seek(byte_start)
                 remaining = chunk_size
                 while remaining > 0:
-                    data = f.read(min(65536, remaining))  # Chunks de 64KB
+                    data = f.read(min(65536, remaining))
                     if not data:
                         break
                     remaining -= len(data)
@@ -351,81 +526,57 @@ def serve_media():
 
         response = Response(
             stream_with_context(generate_chunk()),
-            status=206,  # Partial Content
+            status=206,
             mimetype=mime_type,
         )
-        response.headers["Content-Range"] = f"bytes {byte_start}-{byte_end}/{file_size}"
-        response.headers["Accept-Ranges"] = "bytes"
+        response.headers["Content-Range"]  = f"bytes {byte_start}-{byte_end}/{file_size}"
+        response.headers["Accept-Ranges"]  = "bytes"
         response.headers["Content-Length"] = str(chunk_size)
-        response.headers["Cache-Control"] = "no-cache"
-        logger.info(f"Streaming parcial: {target.name} [{byte_start}-{byte_end}]")
+        response.headers["Cache-Control"]  = "no-cache"
+        logger.info(f"Stream parcial: {target.name} [{byte_start}–{byte_end}]")
         return response
 
-    # Sin Range: enviar el archivo completo
-    logger.info(f"Sirviendo archivo: {target.name} ({file_size} bytes)")
+    logger.info(f"Archivo completo: {target.name} ({file_size} bytes)")
     return send_file(target, mimetype=mime_type)
 
 
-# ─────────────────────────────────────────────────────────────────
-# BLOQUE 7: RUTA — Descarga desde YouTube/Vimeo con yt-dlp
-# Requiere que yt-dlp esté instalado: pip install yt-dlp
-# ─────────────────────────────────────────────────────────────────
-
 @app.route("/api/download", methods=["POST"])
+@require_auth
 def download_video():
     """
     POST /api/download
-    Body JSON: { "url": "https://youtube.com/watch?v=...", "quality": "best" }
-    
-    Descarga un video usando yt-dlp y lo guarda en el directorio de medios.
-    Retorna información del archivo descargado.
-    
-    Requiere: yt-dlp instalado (pip install yt-dlp)
+    Body: { "url": "...", "quality": "best" }
+    Descarga un video con yt-dlp al directorio de medios.
+    Requiere autenticación.
     """
     data = request.get_json()
     if not data or "url" not in data:
         return jsonify({"error": "Body JSON con campo 'url' requerido"}), 400
 
     url = data["url"].strip()
-    quality = data.get("quality", "best")  # Calidad: 'best', '720p', '480p', etc.
+    quality = data.get("quality", "best")
     output_dir = data.get("output_dir", MEDIA_ROOT)
 
-    # Verificar que yt-dlp está instalado
     try:
         subprocess.run(["yt-dlp", "--version"], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return jsonify({
-            "error": "yt-dlp no instalado. Ejecuta: pip install yt-dlp"
-        }), 503
+        return jsonify({"error": "yt-dlp no instalado: pip3 install yt-dlp"}), 503
 
-    # Configurar el comando de descarga
     output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
     cmd = [
-        "yt-dlp",
-        "--format", quality,
+        "yt-dlp", "--format", quality,
         "--output", output_template,
-        "--no-playlist",        # No descargar listas de reproducción completas
-        "--restrict-filenames", # Nombres de archivo seguros (sin caracteres especiales)
-        "--print", "filename",  # Imprimir el nombre del archivo descargado
-        url,
+        "--no-playlist", "--restrict-filenames",
+        "--print", "filename", url,
     ]
 
-    logger.info(f"Iniciando descarga: {url}")
+    logger.info(f"Descarga: {url}")
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,  # Tiempo máximo: 5 minutos
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
-            logger.error(f"Error yt-dlp: {result.stderr}")
             return jsonify({"error": result.stderr}), 500
-
-        # Obtener el nombre del archivo descargado
         filename = result.stdout.strip().split("\n")[-1]
         file_path = Path(filename)
-
         return jsonify({
             "success": True,
             "filename": file_path.name,
@@ -433,201 +584,251 @@ def download_video():
             "size_mb": round(file_path.stat().st_size / (1024 * 1024), 2) if file_path.exists() else None,
         })
     except subprocess.TimeoutExpired:
-        return jsonify({"error": "Tiempo de descarga agotado (máximo 5 minutos)"}), 504
+        return jsonify({"error": "Tiempo agotado (máximo 5 minutos)"}), 504
     except Exception as e:
-        logger.error(f"Error descarga: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-# ─────────────────────────────────────────────────────────────────
-# BLOQUE 8: RUTA — Recorte de Segmento con ffmpeg
-# Extrae un fragmento de video entre dos marcas de tiempo
-# ─────────────────────────────────────────────────────────────────
-
 @app.route("/api/segment", methods=["POST"])
+@require_auth
 def cut_segment():
     """
     POST /api/segment
-    Body JSON: {
-        "path": "/Videos/pelicula.mp4",
-        "start": 30.5,     (segundos)
-        "end": 90.0,       (segundos)
-        "output_name": "mi_segmento"  (opcional)
-    }
-    
-    Recorta un segmento de video usando ffmpeg y lo retorna como descarga.
-    Requiere: ffmpeg instalado en el sistema
-    
-    Retorna:
-        Archivo de video recortado para descarga directa
+    Body: { "path": "...", "start": 30.5, "end": 90.0, "output_name": "clip" }
+    Recorta un segmento de video con ffmpeg.
+    Requiere autenticación.
     """
     data = request.get_json()
     if not data or "path" not in data:
-        return jsonify({"error": "Body JSON con campos 'path', 'start' y 'end' requerido"}), 400
+        return jsonify({"error": "Campos 'path', 'start', 'end' requeridos"}), 400
 
-    relative = data.get("path", "")
-    start_sec = float(data.get("start", 0))
-    end_sec = float(data.get("end", 0))
+    relative    = data.get("path", "")
+    start_sec   = float(data.get("start", 0))
+    end_sec     = float(data.get("end", 0))
     output_name = data.get("output_name", "segmento")
 
-    # Validar el segmento
     if end_sec <= start_sec:
         return jsonify({"error": "El tiempo de fin debe ser mayor al de inicio"}), 400
 
-    # Obtener ruta segura del archivo fuente
     target = safe_path(MEDIA_ROOT, relative)
     if not target or not target.exists() or not target.is_file():
-        return jsonify({"error": "Archivo fuente no encontrado"}), 404
+        return jsonify({"error": "Archivo no encontrado"}), 404
 
-    # Verificar que ffmpeg está disponible
     try:
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return jsonify({"error": "ffmpeg no instalado. Visita: https://ffmpeg.org/download.html"}), 503
+        return jsonify({"error": "ffmpeg no instalado: sudo apt install ffmpeg"}), 503
 
-    # Calcular duración del segmento
     duration = end_sec - start_sec
-
-    # Crear archivo temporal para el resultado
     suffix = target.suffix
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp_path = tmp.name
 
-    # Comando ffmpeg para recortar sin re-codificar (más rápido)
     cmd = [
-        "ffmpeg",
-        "-y",                           # Sobrescribir sin preguntar
-        "-ss", str(start_sec),          # Tiempo de inicio
-        "-i", str(target),              # Archivo de entrada
-        "-t", str(duration),            # Duración del segmento
-        "-c", "copy",                   # Sin re-codificar (rápido)
-        "-avoid_negative_ts", "1",      # Evitar timestamps negativos
+        "ffmpeg", "-y",
+        "-ss", str(start_sec),
+        "-i", str(target),
+        "-t", str(duration),
+        "-c", "copy",
+        "-avoid_negative_ts", "1",
         tmp_path,
     ]
 
-    logger.info(f"Recortando segmento: {target.name} [{start_sec}s → {end_sec}s]")
+    logger.info(f"Segmento: {target.name} [{start_sec}s → {end_sec}s]")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
-            logger.error(f"Error ffmpeg: {result.stderr}")
-            return jsonify({"error": f"Error ffmpeg: {result.stderr[-500:]}"}), 500
-
-        # Enviar el archivo recortado como descarga
+            return jsonify({"error": f"ffmpeg error: {result.stderr[-500:]}"}), 500
         download_name = f"{output_name}_{int(start_sec)}s-{int(end_sec)}s{suffix}"
-        return send_file(
-            tmp_path,
-            as_attachment=True,
-            download_name=download_name,
-            mimetype="video/mp4",
-        )
+        return send_file(tmp_path, as_attachment=True, download_name=download_name, mimetype="video/mp4")
     except subprocess.TimeoutExpired:
-        return jsonify({"error": "Tiempo de recorte agotado (máximo 2 minutos)"}), 504
+        return jsonify({"error": "Tiempo agotado (máximo 2 minutos)"}), 504
     except Exception as e:
-        logger.error(f"Error segmento: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
-        # Limpiar archivo temporal en un thread separado para no bloquear
-        def cleanup():
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-        threading.Thread(target=cleanup, daemon=True).start()
+        threading.Thread(
+            target=lambda: (os.unlink(tmp_path) if os.path.exists(tmp_path) else None),
+            daemon=True
+        ).start()
 
 
-# ─────────────────────────────────────────────────────────────────
-# BLOQUE 9: RUTA — Estado del Servidor (Health Check)
-# ─────────────────────────────────────────────────────────────────
-
-@app.route("/api/health", methods=["GET"])
-def health_check():
+@app.route("/api/connections", methods=["GET"])
+@require_auth
+def get_connections():
     """
-    GET /api/health
-    
-    Verifica que el servidor está funcionando y retorna información del entorno.
-    Útil para el frontend para confirmar que el servidor local está activo.
+    GET /api/connections?lines=50
+    Retorna las últimas N líneas del registro de conexiones.
+    Requiere autenticación.
     """
-    # Verificar disponibilidad de herramientas opcionales
-    has_ytdlp = False
-    has_ffmpeg = False
+    lines_n = int(request.args.get("lines", 50))
+    if not CONN_LOG_FILE.exists():
+        return jsonify({"connections": [], "total": 0})
 
-    try:
-        subprocess.run(["yt-dlp", "--version"], capture_output=True, check=True)
-        has_ytdlp = True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
+    with open(CONN_LOG_FILE, "r", encoding="utf-8") as f:
+        all_lines = f.readlines()
 
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        has_ffmpeg = True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
+    last_lines = all_lines[-lines_n:]
     return jsonify({
-        "status": "ok",
-        "media_root": MEDIA_ROOT,
-        "tools": {
-            "yt_dlp": has_ytdlp,
-            "ffmpeg": has_ffmpeg,
-        },
-        "version": "1.0.0",
+        "connections": [l.strip() for l in last_lines],
+        "total": len(all_lines),
+        "showing": len(last_lines),
     })
 
 
 # ─────────────────────────────────────────────────────────────────
-# BLOQUE 10: PUNTO DE ENTRADA — Parseo de argumentos e inicio
+# BLOQUE 13: BANNER DE INICIO
+# Muestra toda la información de conexión al arrancar el servidor
 # ─────────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    # Configurar argumentos de línea de comandos
+def get_local_ip() -> str:
+    """Obtiene la IP de la red local (LAN) del servidor."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
+def print_banner(host: str, port: int, media_dir: str, daemon: bool, config: configparser.ConfigParser):
+    """Imprime el banner de inicio con toda la información de conexión."""
+    local_ip  = get_local_ip()
+    username  = config.get("auth", "username", fallback="rocio")
+    pid       = os.getpid()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # URL de acceso
+    if host in ("0.0.0.0", ""):
+        url_local = f"http://127.0.0.1:{port}"
+        url_lan   = f"http://{local_ip}:{port}"
+    else:
+        url_local = f"http://{host}:{port}"
+        url_lan   = f"http://{local_ip}:{port}" if host == "0.0.0.0" else None
+
+    print()
+    print("╔══════════════════════════════════════════════════════════╗")
+    print("║          ROCIO — Servidor Multimedia Local v2           ║")
+    print("╠══════════════════════════════════════════════════════════╣")
+    print(f"║  Iniciado:  {timestamp}                   ║")
+    print(f"║  PID:       {pid:<46} ║")
+    print(f"║  Modo:      {'Segundo plano (demonio)' if daemon else 'Consola (primer plano)':<46} ║")
+    print("╠══════════════════════════════════════════════════════════╣")
+    print(f"║  URL local: {url_local:<46} ║")
+    if url_lan:
+        print(f"║  URL LAN:   {url_lan:<46} ║")
+    print(f"║  Puerto:    {port:<46} ║")
+    print(f"║  Medios:    {media_dir:<46} ║")
+    print("╠══════════════════════════════════════════════════════════╣")
+    print(f"║  Usuario:   {username:<46} ║")
+    print(f"║  Config:    {str(CONFIG_FILE):<46} ║")
+    print(f"║  Conexiones:{str(CONN_LOG_FILE):<46} ║")
+    if daemon:
+        print(f"║  Log:       {str(SERVER_LOG):<46} ║")
+        print(f"║  PID file:  {str(PID_FILE):<46} ║")
+    print("╠══════════════════════════════════════════════════════════╣")
+    print("║  API disponible:                                        ║")
+    print(f"║    GET  {url_local}/api/health        (sin auth) ║")
+    print(f"║    GET  {url_local}/api/tree                           ║")
+    print(f"║    GET  {url_local}/api/media?path=...                 ║")
+    print(f"║    POST {url_local}/api/download                       ║")
+    print(f"║    POST {url_local}/api/segment                        ║")
+    print(f"║    GET  {url_local}/api/connections                    ║")
+    print("╠══════════════════════════════════════════════════════════╣")
+    if daemon:
+        print("║  Para detener:  python3 server.py --stop                ║")
+    else:
+        print("║  Para detener:  Ctrl+C                                  ║")
+    print("╚══════════════════════════════════════════════════════════╝")
+    print()
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLOQUE 14: PUNTO DE ENTRADA (main)
+# Parsea argumentos y arranca el servidor
+# ─────────────────────────────────────────────────────────────────
+
+def main():
+    global MEDIA_ROOT, CONFIG, logger
+
     parser = argparse.ArgumentParser(
-        description="Rocio — Servidor Multimedia en Python",
+        description="Rocio — Servidor Multimedia Local",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos:
-  python server.py                          # Inicia en localhost:5000
-  python server.py --port 8080              # Puerto personalizado
-  python server.py --dir /home/user/Videos  # Directorio de medios
-  python server.py --host 0.0.0.0           # Accesible en red local
+  python3 server.py                          Iniciar en consola
+  python3 server.py --daemon                 Iniciar en segundo plano
+  python3 server.py --stop                   Detener el demonio
+  python3 server.py --dir /home/user/Videos  Servir directorio específico
+  python3 server.py --host 0.0.0.0           Accesible desde la red local
+  python3 server.py --set-password           Cambiar contraseña
         """,
     )
-    parser.add_argument(
-        "--port", type=int, default=DEFAULT_PORT,
-        help=f"Puerto del servidor (por defecto: {DEFAULT_PORT})"
-    )
-    parser.add_argument(
-        "--host", default="127.0.0.1",
-        help="Dirección de escucha (por defecto: 127.0.0.1)"
-    )
-    parser.add_argument(
-        "--dir", default=DEFAULT_MEDIA_DIR,
-        help=f"Directorio raíz de medios (por defecto: {DEFAULT_MEDIA_DIR})"
-    )
-    parser.add_argument(
-        "--debug", action="store_true",
-        help="Activar modo debug de Flask"
-    )
-
+    parser.add_argument("--host",         default=None,           help="Interfaz de red (por defecto: 127.0.0.1)")
+    parser.add_argument("--port",         type=int, default=None, help="Puerto del servidor (por defecto: 5000)")
+    parser.add_argument("--dir",          default=None,           help="Directorio raíz de medios")
+    parser.add_argument("--daemon",       action="store_true",    help="Iniciar en segundo plano")
+    parser.add_argument("--stop",         action="store_true",    help="Detener el servidor en segundo plano")
+    parser.add_argument("--set-password", action="store_true",    help="Cambiar la contraseña del servidor")
+    parser.add_argument("--debug",        action="store_true",    help="Modo debug de Flask")
     args = parser.parse_args()
 
-    # Configurar directorio de medios global
-    MEDIA_ROOT = str(Path(args.dir).resolve())
-    if not os.path.isdir(MEDIA_ROOT):
-        logger.error(f"El directorio '{MEDIA_ROOT}' no existe.")
+    # ── Cargar configuración ──────────────────────────────────────
+    CONFIG = load_config()
+
+    # ── Detener demonio ───────────────────────────────────────────
+    if args.stop:
+        stop_daemon()
+        sys.exit(0)
+
+    # ── Cambiar contraseña ────────────────────────────────────────
+    if args.set_password:
+        import getpass
+        new_pass = getpass.getpass("Nueva contraseña: ")
+        confirm  = getpass.getpass("Confirmar contraseña: ")
+        if new_pass != confirm:
+            print("ERROR: Las contraseñas no coinciden.")
+            sys.exit(1)
+        change_password(new_pass, CONFIG)
+        sys.exit(0)
+
+    # ── Resolver host, puerto y directorio ────────────────────────
+    host      = args.host or CONFIG.get("server", "host", fallback=DEFAULT_HOST)
+    port      = args.port or CONFIG.getint("server", "port", fallback=DEFAULT_PORT)
+    media_dir = args.dir  or CONFIG.get("server", "media_dir", fallback=DEFAULT_MEDIA_DIR)
+
+    MEDIA_ROOT = str(Path(media_dir).expanduser().resolve())
+
+    if not Path(MEDIA_ROOT).exists():
+        print(f"ERROR: El directorio de medios no existe: {MEDIA_ROOT}")
         sys.exit(1)
 
-    logger.info("=" * 60)
-    logger.info("  ROCIO — Servidor Multimedia")
-    logger.info("=" * 60)
-    logger.info(f"  URL:        http://{args.host}:{args.port}")
-    logger.info(f"  Medios:     {MEDIA_ROOT}")
-    logger.info(f"  Debug:      {args.debug}")
-    logger.info("=" * 60)
+    # ── Modo demonio ──────────────────────────────────────────────
+    if args.daemon:
+        print_banner(host, port, MEDIA_ROOT, daemon=True, config=CONFIG)
+        start_daemon(args)
+        # El proceso hijo continúa aquí
 
-    # Iniciar el servidor Flask
+    # ── Configurar logger ─────────────────────────────────────────
+    logger = setup_logger(daemon_mode=args.daemon)
+
+    # ── Limpiar PID al salir ──────────────────────────────────────
+    import atexit
+    atexit.register(cleanup_pid)
+
+    # ── Banner (solo en modo consola) ─────────────────────────────
+    if not args.daemon:
+        print_banner(host, port, MEDIA_ROOT, daemon=False, config=CONFIG)
+
+    # ── Iniciar Flask ─────────────────────────────────────────────
+    logger.info(f"Iniciando servidor en {host}:{port} | Medios: {MEDIA_ROOT}")
     app.run(
-        host=args.host,
-        port=args.port,
+        host=host,
+        port=port,
         debug=args.debug,
-        threaded=True,  # Soportar múltiples conexiones simultáneas
+        use_reloader=False,   # Deshabilitar reloader (conflicto con daemon)
+        threaded=True,
     )
+
+
+if __name__ == "__main__":
+    main()
