@@ -24,6 +24,7 @@ import {
   PanelRightClose, PanelRightOpen, PanelLeftClose, PanelLeftOpen,
   Sun, Moon, Star, StarOff, HardDrive, Heart, List,
   ChevronLeft, ChevronUp, Play as PlayIcon, LayoutGrid,
+  Ratio, Expand, Shrink,
 } from "lucide-react";
 import { SiWhatsapp, SiTelegram, SiFacebook, SiInstagram } from "react-icons/si";
 import { Button } from "@/components/ui/button";
@@ -417,6 +418,12 @@ export default function Player() {
   const [showLeftPanel, setShowLeftPanel] = useState(true);
   const [showQueue, setShowQueue] = useState(false);
   const [queuePage, setQueuePage] = useState(0);
+
+  /* ── Aspecto / relación del video ── */
+  const [videoFit, setVideoFit] = useState<"contain" | "cover" | "fill">("contain");
+  const fitLabels: Record<string, string> = { contain: "Ajustado", cover: "Rellenar", fill: "Estirar" };
+  const fitCycle = { contain: "cover", cover: "fill", fill: "contain" } as const;
+  const cycleVideoFit = () => setVideoFit(prev => fitCycle[prev]);
 
   /* ── Reproductor ── */
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1191,7 +1198,8 @@ export default function Player() {
               <video
                 ref={videoRef}
                 src={mediaSource}
-                className="max-w-full max-h-full"
+                className="w-full h-full"
+                style={{ objectFit: videoFit }}
                 onClick={togglePlay}
                 data-testid="video-player"
               />
@@ -1239,25 +1247,109 @@ export default function Player() {
           <div className="bg-card/80 backdrop-blur-md border-t border-border px-4 py-2.5 space-y-2">
             {/* Barra de progreso */}
             {mediaType !== "embed" && (
-              <div className="space-y-0.5">
-                <Slider
-                  min={0} max={duration || 100} step={0.1}
-                  value={[currentTime]}
-                  onValueChange={handleSeek}
-                  disabled={!mediaSource && !activeVideoId}
-                  data-testid="slider-progress"
-                />
-                {isSegmentMode && duration > 0 && (
-                  <div className="relative h-1">
-                    <div
-                      className="absolute h-1 bg-primary/40 rounded"
-                      style={{
-                        left: `${(segmentStart / duration) * 100}%`,
-                        width: `${((segmentEnd - segmentStart) / duration) * 100}%`,
-                      }}
-                    />
+              <div className="space-y-1">
+                {/* Slider de posición + rango de segmento superpuesto */}
+                <div className="relative">
+                  <Slider
+                    min={0} max={duration || 100} step={0.1}
+                    value={[currentTime]}
+                    onValueChange={handleSeek}
+                    disabled={!mediaSource && !activeVideoId}
+                    data-testid="slider-progress"
+                  />
+                  {isSegmentMode && duration > 0 && segmentEnd > segmentStart && (
+                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 pointer-events-none">
+                      <div
+                        className="absolute h-full bg-red-500/40 rounded-full"
+                        style={{
+                          left: `${(segmentStart / duration) * 100}%`,
+                          width: `${Math.max(0, (segmentEnd - segmentStart) / duration) * 100}%`,
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Controles de segmento inline */}
+                {isSegmentMode && (
+                  <div className="flex items-center gap-1 px-0.5">
+                    {/* Marcar inicio */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline" size="sm"
+                          onClick={markSegmentStart}
+                          className="h-6 px-2 text-[10px] font-mono border-red-500/50 text-red-400 hover:bg-red-500/10"
+                          data-testid="button-mark-start"
+                        >
+                          A: {formatTime(segmentStart)}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Marcar inicio en tiempo actual</TooltipContent>
+                    </Tooltip>
+
+                    {/* Rango visual expandido */}
+                    <div className="flex-1 relative h-2 bg-secondary/40 rounded-full overflow-hidden">
+                      {duration > 0 && segmentEnd > segmentStart && (
+                        <div
+                          className="absolute h-full bg-red-500/60 rounded-full"
+                          style={{
+                            left: `${(segmentStart / duration) * 100}%`,
+                            width: `${Math.max(0, (segmentEnd - segmentStart) / duration) * 100}%`,
+                          }}
+                        />
+                      )}
+                    </div>
+
+                    {/* Marcar fin */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline" size="sm"
+                          onClick={markSegmentEnd}
+                          className="h-6 px-2 text-[10px] font-mono border-red-500/50 text-red-400 hover:bg-red-500/10"
+                          data-testid="button-mark-end"
+                        >
+                          B: {formatTime(segmentEnd)}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Marcar fin en tiempo actual</TooltipContent>
+                    </Tooltip>
+
+                    {/* Grabar / Detener */}
+                    {!isRecording ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost" size="icon"
+                            onClick={startSegmentRecording}
+                            disabled={segmentEnd <= segmentStart}
+                            className="h-6 w-6 text-red-400 hover:bg-red-500/10"
+                            data-testid="button-record-start"
+                          >
+                            <Circle className="w-3 h-3 fill-red-500 text-red-500" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Grabar segmento seleccionado</TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost" size="icon"
+                            onClick={stopSegmentRecording}
+                            className="h-6 w-6 text-red-400 animate-pulse hover:bg-red-500/10"
+                            data-testid="button-record-stop"
+                          >
+                            <Square className="w-3 h-3 fill-red-500 text-red-500" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Detener grabación</TooltipContent>
+                      </Tooltip>
+                    )}
                   </div>
                 )}
+
                 <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
                   <span data-testid="text-current-time">{formatTime(currentTime)}</span>
                   <span data-testid="text-duration">{formatTime(duration)}</span>
@@ -1343,6 +1435,46 @@ export default function Player() {
                   </TooltipTrigger>
                   <TooltipContent>{showQueue ? "Ocultar cola" : "Mostrar cola"}</TooltipContent>
                 </Tooltip>
+
+                {/* Modo segmento */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={isSegmentMode ? "secondary" : "ghost"}
+                      size="icon"
+                      onClick={() => setIsSegmentMode(!isSegmentMode)}
+                      disabled={mediaType === "embed"}
+                      className={`h-8 w-8 ${isSegmentMode ? "text-red-400" : ""}`}
+                      data-testid="button-toggle-segment"
+                    >
+                      <Scissors className="w-3.5 h-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{isSegmentMode ? "Desactivar selección de segmento" : "Seleccionar segmento para grabar"}</TooltipContent>
+                </Tooltip>
+
+                {/* Aspecto / relación de video */}
+                {mediaType === "video" && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={cycleVideoFit}
+                        className="h-8 px-2 text-[10px] font-medium text-muted-foreground hover:text-foreground hidden sm:flex"
+                        data-testid="button-video-fit"
+                      >
+                        {videoFit === "contain" && <Shrink className="w-3 h-3 mr-1" />}
+                        {videoFit === "cover" && <Expand className="w-3 h-3 mr-1" />}
+                        {videoFit === "fill" && <Ratio className="w-3 h-3 mr-1" />}
+                        {fitLabels[videoFit]}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Ajustado = preserva proporción · Rellenar = recorta · Estirar = sin proporción
+                    </TooltipContent>
+                  </Tooltip>
+                )}
 
                 <Button variant="ghost" size="icon" onClick={toggleFullscreen} disabled={mediaType === "embed"} className="h-8 w-8" data-testid="button-fullscreen">
                   {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
