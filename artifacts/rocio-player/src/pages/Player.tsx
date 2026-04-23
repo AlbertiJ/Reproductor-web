@@ -280,8 +280,8 @@ function FileTreeNode({
           className="border-border w-3.5 h-3.5 flex-shrink-0"
         />
 
-        {/* Expandir carpeta */}
-        {node.type === "folder" && node.children?.length ? (
+        {/* Expandir carpeta — siempre visible para carpetas */}
+        {node.type === "folder" ? (
           <button onClick={() => onToggleOpen(node.id)} className="text-muted-foreground hover:text-foreground flex-shrink-0">
             {node.isOpen
               ? <ChevronDown className="w-3 h-3" />
@@ -581,13 +581,20 @@ export default function Player() {
   const [favoriteVideoIds, setFavoriteVideoIds] = useState<Set<string>>(new Set());
 
   /* ── Pestaña activa del panel derecho ── */
-  const [rightTab, setRightTab] = useState<"library" | "url" | "segment" | "share" | "playlist">("library");
+  const [rightTab, setRightTab] = useState<"library" | "url">("library");
 
   /* ── Pestaña del explorador de directorios ── */
   const [libraryTab, setLibraryTab] = useState<"disk" | "favorites">("disk");
 
   /* ── Carpeta favorita expandida en panel izquierdo (acordeón) ── */
   const [expandedFavFolderPath, setExpandedFavFolderPath] = useState<string | null>(null);
+
+  /* ── Caché de archivos cargados por carpeta vía /api/files ── */
+  const [folderFilesCache, setFolderFilesCache] = useState<Record<string, VideoItem[]>>({});
+  const [loadingFolderPath, setLoadingFolderPath] = useState<string | null>(null);
+
+  /* ── Lista de reproducción personalizada ── */
+  const [playlistItems, setPlaylistItems] = useState<VideoItem[]>([]);
 
   /* ── Grabación ── */
   const [segmentStart, setSegmentStart] = useState(0);
@@ -603,13 +610,11 @@ export default function Player() {
     [videoList, favoriteVideoIds]
   );
 
-  /* ── Archivos de la carpeta favorita expandida en acordeón izquierdo ── */
+  /* ── Archivos de la carpeta favorita expandida (desde caché API) ── */
   const expandedFolderFiles = useMemo(() => {
     if (!expandedFavFolderPath) return [];
-    return videoList.filter(v =>
-      v.path.startsWith(expandedFavFolderPath + "/") || v.path === expandedFavFolderPath
-    );
-  }, [videoList, expandedFavFolderPath]);
+    return folderFilesCache[expandedFavFolderPath] ?? [];
+  }, [folderFilesCache, expandedFavFolderPath]);
 
   /* ── Archivos favoritos agrupados por carpeta (sección Favoritos archivos) ── */
   const favVideosByFolder = useMemo(() => {
@@ -637,7 +642,7 @@ export default function Player() {
   useEffect(() => {
     if (!isLoggedIn) return;
     setIsLoadingTree(true);
-    apiGet<{ tree: FileNode }>("/api/tree")
+    apiGet<{ tree: FileNode }>("/api/tree?depth=8")
       .then(({ tree }) => {
         const children = tree.children || [];
         setDiskTree(children);
@@ -646,6 +651,36 @@ export default function Player() {
       .catch(() => toast({ title: "Error", description: "No se pudo cargar el árbol de archivos", variant: "destructive" }))
       .finally(() => setIsLoadingTree(false));
   }, [isLoggedIn]);
+
+  /* ================================================================
+   * EFECTO: cargar archivos de carpeta favorita expandida via API
+   * ================================================================ */
+  useEffect(() => {
+    if (!expandedFavFolderPath || !isLoggedIn) return;
+    if (folderFilesCache[expandedFavFolderPath]) return; // ya cargado
+    setLoadingFolderPath(expandedFavFolderPath);
+    apiGet<{ files: Array<{ name: string; type: string; path: string; size_mb: number | null }> }>(
+      `/api/files?path=${encodeURIComponent(expandedFavFolderPath)}`
+    )
+      .then(({ files }) => {
+        const items: VideoItem[] = files
+          .filter(f => f.type === "video" || f.type === "audio")
+          .map(f => ({
+            id: f.path,
+            name: f.name,
+            path: f.path,
+            type: f.type as "video" | "audio",
+            duration: "--:--",
+            folder: expandedFavFolderPath.split("/").filter(Boolean).pop() ?? expandedFavFolderPath,
+            color: PALETTE[Math.abs(f.name.split("").reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 0)) % PALETTE.length],
+          }));
+        setFolderFilesCache(prev => ({ ...prev, [expandedFavFolderPath]: items }));
+      })
+      .catch(() => {
+        setFolderFilesCache(prev => ({ ...prev, [expandedFavFolderPath]: [] }));
+      })
+      .finally(() => setLoadingFolderPath(null));
+  }, [expandedFavFolderPath, isLoggedIn]);
 
   /* ================================================================
    * EFECTO: sincronizar tiempo del video
@@ -1249,80 +1284,81 @@ export default function Player() {
         {showLeftPanel && (
           <aside className="w-64 border-r border-border bg-sidebar flex flex-col overflow-hidden flex-shrink-0">
 
-            {/* ══════════════ SECCIÓN: CARPETAS FAVORITAS ══════════════ */}
-            <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border flex-shrink-0 bg-sidebar">
-              <FolderOpen className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />
-              <span className="text-[11px] font-semibold tracking-wide text-foreground/80 uppercase flex-1">
-                Carpetas Favoritas
-              </span>
+            {/* ══ SEC 1: CARPETAS FAVORITAS (acordeón) ══ */}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border flex-shrink-0 bg-sidebar/80">
+              <FolderOpen className="w-3 h-3 text-yellow-400 flex-shrink-0" />
+              <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase flex-1">Carpetas Favoritas</span>
               {favorites.length > 0 && (
-                <span className="text-[9px] bg-yellow-400/20 text-yellow-400 rounded-full px-1.5 py-0.5 font-bold">
-                  {favorites.length}
-                </span>
+                <span className="text-[9px] bg-yellow-400/20 text-yellow-400 rounded-full px-1.5 font-bold">{favorites.length}</span>
               )}
             </div>
 
-            <div className="flex-shrink-0 overflow-y-auto" style={{ maxHeight: "45%" }}>
+            <div className="flex-shrink-0 overflow-y-auto border-b border-border" style={{ maxHeight: "33%" }}>
               {favorites.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-2 py-6 px-4 text-center">
-                  <FolderOpen className="w-8 h-8 text-muted-foreground/20" />
-                  <p className="text-[10px] text-muted-foreground leading-relaxed">
-                    Marca carpetas con ★ en el panel de Dirs para verlas aquí.
-                  </p>
-                </div>
+                <p className="text-[10px] text-muted-foreground px-3 py-3 text-center leading-relaxed">
+                  Marcá carpetas con ★ en el panel Dirs.
+                </p>
               ) : (
-                <div className="py-1">
+                <div>
                   {favorites.map(fav => {
                     const isExpanded = expandedFavFolderPath === fav.path;
-                    const filesHere = isExpanded ? expandedFolderFiles : [];
+                    const isLoading = loadingFolderPath === fav.path;
+                    const filesHere = expandedFolderFiles;
                     return (
                       <div key={fav.id}>
-                        {/* Fila de carpeta — click para expandir/colapsar */}
-                        <button
-                          onClick={() => setExpandedFavFolderPath(isExpanded ? null : fav.path)}
-                          className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-secondary/40 ${
-                            isExpanded ? "bg-yellow-400/10" : ""
-                          }`}
-                          data-testid={`fav-folder-${fav.id}`}
-                        >
-                          {isExpanded
-                            ? <ChevronDown className="w-3 h-3 text-yellow-400 flex-shrink-0" />
-                            : <ChevronRight className="w-3 h-3 text-muted-foreground flex-shrink-0" />
-                          }
-                          <FolderOpen className={`w-3.5 h-3.5 flex-shrink-0 ${isExpanded ? "text-yellow-400" : "text-yellow-400/60"}`} />
-                          <span className={`text-xs font-medium truncate flex-1 ${isExpanded ? "text-yellow-400" : "text-foreground/80"}`}>
-                            {fav.name}
-                          </span>
+                        <div className={`flex items-center gap-1.5 px-2 py-1.5 group cursor-pointer hover:bg-secondary/30 transition-colors ${isExpanded ? "bg-yellow-400/10" : ""}`}>
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeFromFavorites(fav.id);
-                              if (expandedFavFolderPath === fav.path) setExpandedFavFolderPath(null);
-                            }}
-                            className="opacity-0 group-hover:opacity-100 hover:opacity-100 text-muted-foreground hover:text-destructive flex-shrink-0 transition-opacity"
-                            title="Quitar carpeta de favoritos"
+                            onClick={() => setExpandedFavFolderPath(isExpanded ? null : fav.path)}
+                            className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+                            data-testid={`fav-folder-${fav.id}`}
                           >
-                            <X className="w-3 h-3" />
+                            {isExpanded
+                              ? <ChevronDown className="w-3 h-3 text-yellow-400 flex-shrink-0" />
+                              : <ChevronRight className="w-3 h-3 text-muted-foreground flex-shrink-0" />
+                            }
+                            {isLoading
+                              ? <span className="w-3 h-3 border border-yellow-400/50 border-t-yellow-400 rounded-full animate-spin flex-shrink-0" />
+                              : <FolderOpen className={`w-3 h-3 flex-shrink-0 ${isExpanded ? "text-yellow-400" : "text-yellow-400/60"}`} />
+                            }
+                            <span className={`text-xs font-medium truncate ${isExpanded ? "text-yellow-400" : "text-foreground/80"}`}>{fav.name}</span>
                           </button>
-                        </button>
+                          <button
+                            onClick={() => { removeFromFavorites(fav.id); if (expandedFavFolderPath === fav.path) setExpandedFavFolderPath(null); }}
+                            className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive flex-shrink-0"
+                            title="Quitar de favoritos"
+                          ><X className="w-3 h-3" /></button>
+                        </div>
 
-                        {/* Archivos expandidos con acordeón */}
                         {isExpanded && (
-                          <div className="bg-secondary/10 border-b border-border/40">
-                            {filesHere.length === 0 ? (
-                              <p className="text-[10px] text-muted-foreground px-8 py-2">
-                                Sin archivos media en esta carpeta
-                              </p>
+                          <div className="bg-black/10 ml-2 border-l border-yellow-400/20">
+                            {isLoading ? (
+                              <p className="text-[10px] text-muted-foreground px-4 py-2">Cargando...</p>
+                            ) : filesHere.length === 0 ? (
+                              <p className="text-[10px] text-muted-foreground px-4 py-2">Sin archivos en esta carpeta</p>
                             ) : (
                               filesHere.map(item => (
-                                <VideoListItem
+                                <div
                                   key={item.id}
-                                  item={item}
-                                  isActive={activeVideoId === item.id}
-                                  isFav={favoriteVideoIds.has(item.id)}
-                                  onClick={() => selectVideoItem(item)}
-                                  onToggleFav={toggleVideoFavorite}
-                                />
+                                  className={`flex items-center gap-1.5 px-2 py-1 group/item cursor-pointer hover:bg-secondary/30 transition-colors ${activeVideoId === item.id ? "bg-primary/10" : ""}`}
+                                >
+                                  <button onClick={() => selectVideoItem(item)} className="flex items-center gap-1.5 flex-1 min-w-0">
+                                    {item.type === "video"
+                                      ? <Video className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+                                      : <Music className="w-3 h-3 text-purple-400 flex-shrink-0" />
+                                    }
+                                    <span className={`text-[11px] truncate ${activeVideoId === item.id ? "text-primary font-medium" : "text-foreground/75"}`}>{item.name}</span>
+                                  </button>
+                                  <button
+                                    onClick={() => toggleVideoFavorite(item.id)}
+                                    className={`flex-shrink-0 transition-opacity ${favoriteVideoIds.has(item.id) ? "opacity-100 text-yellow-400" : "opacity-0 group-hover/item:opacity-100 text-muted-foreground hover:text-yellow-400"}`}
+                                    title={favoriteVideoIds.has(item.id) ? "Quitar favorito" : "Agregar a favoritos"}
+                                  ><Star className={`w-3 h-3 ${favoriteVideoIds.has(item.id) ? "fill-yellow-400" : ""}`} /></button>
+                                  <button
+                                    onClick={() => { if (!playlistItems.find(p => p.id === item.id)) setPlaylistItems(prev => [...prev, item]); }}
+                                    className="opacity-0 group-hover/item:opacity-100 flex-shrink-0 text-muted-foreground hover:text-primary transition-opacity"
+                                    title="Agregar a playlist"
+                                  ><List className="w-3 h-3" /></button>
+                                </div>
                               ))
                             )}
                           </div>
@@ -1334,77 +1370,119 @@ export default function Player() {
               )}
             </div>
 
-            {/* Separador */}
-            <div className="flex-shrink-0 border-t border-border" />
-
-            {/* ══════════════ SECCIÓN: FAVORITOS (ARCHIVOS) ══════════════ */}
-            <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border flex-shrink-0 bg-sidebar">
-              <Star className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0 fill-yellow-400" />
-              <span className="text-[11px] font-semibold tracking-wide text-foreground/80 uppercase flex-1">
-                Favoritos archivos
-              </span>
+            {/* ══ SEC 2: FAVORITOS ARCHIVOS ══ */}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border flex-shrink-0 bg-sidebar/80">
+              <Star className="w-3 h-3 text-yellow-400 flex-shrink-0 fill-yellow-400" />
+              <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase flex-1">Favoritos</span>
               {favoriteVideoIds.size > 0 && (
-                <span className="text-[9px] bg-yellow-400/20 text-yellow-400 rounded-full px-1.5 py-0.5 font-bold">
-                  {favoriteVideoIds.size}
-                </span>
+                <span className="text-[9px] bg-yellow-400/20 text-yellow-400 rounded-full px-1.5 font-bold">{favoriteVideoIds.size}</span>
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto no-scrollbar">
+            <div className="flex-shrink-0 overflow-y-auto border-b border-border" style={{ maxHeight: "33%" }}>
               {favoriteVideos.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full gap-2 px-4 text-center">
-                  <div className="w-12 h-12 rounded-full bg-yellow-400/10 flex items-center justify-center border border-yellow-400/20">
-                    <Star className="w-6 h-6 text-yellow-400/30" />
-                  </div>
-                  <p className="text-[10px] text-muted-foreground leading-relaxed">
-                    Abrí una carpeta arriba y marcá archivos con ★ para guardarlos aquí.
-                  </p>
-                </div>
+                <p className="text-[10px] text-muted-foreground px-3 py-3 text-center leading-relaxed">
+                  Abrí una carpeta y marcá archivos con ★.
+                </p>
               ) : (
-                <div className="py-1">
+                <div>
                   {[...favVideosByFolder.entries()].map(([folder, files]) => (
                     <div key={folder}>
-                      {/* Encabezado de carpeta */}
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 sticky top-0 bg-sidebar/90 backdrop-blur-sm z-10 border-b border-border/30">
-                        <Folder className="w-3 h-3 text-yellow-400/70 flex-shrink-0" />
+                      <div className="flex items-center gap-1 px-2 py-1 sticky top-0 bg-sidebar/90 z-10 border-b border-border/20">
+                        <Folder className="w-3 h-3 text-yellow-400/60 flex-shrink-0" />
                         <span className="text-[10px] text-muted-foreground font-medium truncate">{folder}</span>
                       </div>
-                      {/* Archivos del grupo */}
                       {files.map(item => (
                         <div
                           key={item.id}
-                          className={`flex items-center gap-2 px-3 py-1.5 hover:bg-secondary/40 transition-colors cursor-pointer group ${
-                            activeVideoId === item.id ? "bg-primary/10" : ""
-                          }`}
-                          onClick={() => selectVideoItem(item)}
+                          className={`flex items-center gap-1.5 px-2 py-1 group/fav cursor-pointer hover:bg-secondary/30 transition-colors ${activeVideoId === item.id ? "bg-primary/10" : ""}`}
                         >
-                          {item.type === "video"
-                            ? <Video className="w-3 h-3 text-cyan-400 flex-shrink-0" />
-                            : <Music className="w-3 h-3 text-purple-400 flex-shrink-0" />
-                          }
-                          <span className={`text-xs truncate flex-1 ${activeVideoId === item.id ? "text-primary font-medium" : "text-foreground/80"}`}>
-                            {item.name}
-                          </span>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); toggleVideoFavorite(item.id); }}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity text-yellow-400 hover:text-red-400 flex-shrink-0"
-                            title="Quitar de favoritos"
-                          >
-                            <StarOff className="w-3 h-3" />
+                          <button onClick={() => selectVideoItem(item)} className="flex items-center gap-1.5 flex-1 min-w-0">
+                            {item.type === "video"
+                              ? <Video className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+                              : <Music className="w-3 h-3 text-purple-400 flex-shrink-0" />
+                            }
+                            <span className={`text-[11px] truncate ${activeVideoId === item.id ? "text-primary font-medium" : "text-foreground/75"}`}>{item.name}</span>
                           </button>
+                          <button
+                            onClick={() => { if (!playlistItems.find(p => p.id === item.id)) setPlaylistItems(prev => [...prev, item]); }}
+                            className="opacity-0 group-hover/fav:opacity-100 flex-shrink-0 text-muted-foreground hover:text-primary transition-opacity"
+                            title="Agregar a playlist"
+                          ><List className="w-3 h-3" /></button>
+                          <button
+                            onClick={() => toggleVideoFavorite(item.id)}
+                            className="opacity-0 group-hover/fav:opacity-100 flex-shrink-0 text-yellow-400 hover:text-red-400 transition-opacity"
+                            title="Quitar de favoritos"
+                          ><StarOff className="w-3 h-3" /></button>
                         </div>
                       ))}
                     </div>
                   ))}
-                  {/* Pie: limpiar todo */}
-                  <div className="px-3 py-2 border-t border-border mt-1">
-                    <button
-                      onClick={() => setFavoriteVideoIds(new Set())}
-                      className="text-[10px] text-muted-foreground hover:text-destructive transition-colors w-full text-center"
-                      data-testid="clear-all-favs"
-                    >
-                      Limpiar todos los favoritos
+                  <div className="px-2 py-1.5 border-t border-border/30">
+                    <button onClick={() => setFavoriteVideoIds(new Set())} className="text-[10px] text-muted-foreground hover:text-destructive w-full text-center" data-testid="clear-all-favs">
+                      Limpiar favoritos
                     </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ══ SEC 3: LISTA DE REPRODUCCIÓN ══ */}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border flex-shrink-0 bg-sidebar/80">
+              <List className="w-3 h-3 text-primary flex-shrink-0" />
+              <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase flex-1">Playlist</span>
+              <div className="flex items-center gap-1">
+                {playlistItems.length > 0 && (
+                  <span className="text-[9px] bg-primary/20 text-primary rounded-full px-1.5 font-bold">{playlistItems.length}</span>
+                )}
+                {favoriteVideos.length > 0 && (
+                  <button
+                    onClick={() => {
+                      const toAdd = favoriteVideos.filter(v => !playlistItems.find(p => p.id === v.id));
+                      if (toAdd.length) setPlaylistItems(prev => [...prev, ...toAdd]);
+                    }}
+                    className="text-[9px] text-primary hover:text-primary/80 border border-primary/30 rounded px-1 py-0.5 transition-colors"
+                    title="Agregar todos los favoritos a la playlist"
+                  >+ todos</button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto no-scrollbar">
+              {playlistItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full gap-2 px-4 text-center">
+                  <List className="w-8 h-8 text-muted-foreground/20" />
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    Usá el botón <span className="text-primary">≡</span> en cada archivo favorito para armarte tu playlist.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  {playlistItems.map((item, idx) => (
+                    <div
+                      key={item.id}
+                      className={`flex items-center gap-1.5 px-2 py-1 group/pl cursor-pointer hover:bg-secondary/30 transition-colors ${activeVideoId === item.id ? "bg-primary/10" : ""}`}
+                      onClick={() => selectVideoItem(item)}
+                    >
+                      <span className="text-[10px] text-muted-foreground w-4 text-right flex-shrink-0 font-mono">{idx + 1}</span>
+                      {item.type === "video"
+                        ? <Video className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+                        : <Music className="w-3 h-3 text-purple-400 flex-shrink-0" />
+                      }
+                      <span className={`text-[11px] truncate flex-1 ${activeVideoId === item.id ? "text-primary font-medium" : "text-foreground/75"}`}>{item.name}</span>
+                      <div className="opacity-0 group-hover/pl:opacity-100 flex gap-0.5 flex-shrink-0">
+                        <button onClick={(e) => { e.stopPropagation(); if (idx > 0) setPlaylistItems(prev => { const a = [...prev]; [a[idx-1], a[idx]] = [a[idx], a[idx-1]]; return a; }); }} className="text-muted-foreground hover:text-foreground" title="Subir"><ChevronUp className="w-3 h-3" /></button>
+                        <button onClick={(e) => { e.stopPropagation(); if (idx < playlistItems.length - 1) setPlaylistItems(prev => { const a = [...prev]; [a[idx+1], a[idx]] = [a[idx], a[idx+1]]; return a; }); }} className="text-muted-foreground hover:text-foreground" title="Bajar"><ChevronDown className="w-3 h-3" /></button>
+                        <button onClick={(e) => { e.stopPropagation(); setPlaylistItems(prev => prev.filter((_, i) => i !== idx)); }} className="text-muted-foreground hover:text-destructive" title="Quitar"><X className="w-3 h-3" /></button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="px-2 py-1.5 border-t border-border/30 flex gap-2">
+                    <button
+                      onClick={() => playlistItems.length > 0 && selectVideoItem(playlistItems[0])}
+                      className="flex-1 text-[10px] text-primary hover:text-primary/80 border border-primary/30 rounded py-0.5 transition-colors"
+                    >▶ Reproducir todo</button>
+                    <button onClick={() => setPlaylistItems([])} className="text-[10px] text-muted-foreground hover:text-destructive transition-colors">Limpiar</button>
                   </div>
                 </div>
               )}
@@ -1717,11 +1795,8 @@ export default function Player() {
             {/* Pestañas del panel derecho */}
             <div className="flex border-b border-border overflow-x-auto no-scrollbar">
               {([
-                { key: "library", label: "Dirs" },
-                { key: "playlist", label: "Playlist" },
+                { key: "library", label: "Directorio" },
                 { key: "url", label: "URL" },
-                { key: "segment", label: "Segmento" },
-                { key: "share", label: "Compartir" },
               ] as const).map(({ key, label }) => (
                 <button
                   key={key}
@@ -1740,77 +1815,6 @@ export default function Player() {
 
             <div className="flex-1 overflow-y-auto no-scrollbar">
               <div className="p-3 space-y-3">
-
-                {/* ─────────────────────────────────────────────
-                 * SECCIÓN: PLAYLIST DE FAVORITOS
-                 * ───────────────────────────────────────────── */}
-                {rightTab === "playlist" && (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-1.5">
-                      <Star className="w-3.5 h-3.5 text-yellow-400 fill-yellow-400" />
-                      <span className="text-xs font-semibold">Lista de reproducción</span>
-                      {favoriteVideos.length > 0 && (
-                        <span className="ml-auto text-[10px] text-yellow-400 font-medium">
-                          {favoriteVideos.length} {favoriteVideos.length === 1 ? "archivo" : "archivos"}
-                        </span>
-                      )}
-                    </div>
-
-                    {favoriteVideos.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-border p-6 text-center">
-                        <Star className="w-8 h-8 text-muted-foreground/20 mx-auto mb-2" />
-                        <p className="text-xs text-muted-foreground">
-                          Marcá archivos con ★ en el panel izquierdo para armar tu playlist.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="rounded-lg border border-border overflow-hidden">
-                        {favoriteVideos.map((item, idx) => (
-                          <div
-                            key={item.id}
-                            onClick={() => selectVideoItem(item)}
-                            className={`flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors hover:bg-secondary/40 border-b border-border/40 last:border-0 group ${
-                              activeVideoId === item.id ? "bg-primary/10" : ""
-                            }`}
-                          >
-                            <span className="text-[10px] text-muted-foreground w-4 text-right flex-shrink-0 font-mono">
-                              {idx + 1}
-                            </span>
-                            {item.type === "video"
-                              ? <Video className="w-3 h-3 text-cyan-400 flex-shrink-0" />
-                              : <Music className="w-3 h-3 text-purple-400 flex-shrink-0" />
-                            }
-                            <div className="flex-1 min-w-0">
-                              <p className={`text-xs truncate font-medium ${activeVideoId === item.id ? "text-primary" : "text-foreground/80"}`}>
-                                {item.name}
-                              </p>
-                              <p className="text-[10px] text-muted-foreground truncate">{item.folder}</p>
-                            </div>
-                            {activeVideoId === item.id && (
-                              <div className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0 animate-pulse" />
-                            )}
-                            <button
-                              onClick={(e) => { e.stopPropagation(); toggleVideoFavorite(item.id); }}
-                              className="opacity-0 group-hover:opacity-100 transition-opacity text-yellow-400 hover:text-red-400 flex-shrink-0"
-                              title="Quitar de favoritos"
-                            >
-                              <StarOff className="w-3 h-3" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {favoriteVideos.length > 0 && (
-                      <button
-                        onClick={() => setFavoriteVideoIds(new Set())}
-                        className="w-full text-[10px] text-muted-foreground hover:text-destructive transition-colors text-center py-1"
-                      >
-                        Limpiar playlist
-                      </button>
-                    )}
-                  </div>
-                )}
 
                 {/* ─────────────────────────────────────────────
                  * SECCIÓN: DIRECTORIOS
@@ -1992,132 +1996,6 @@ export default function Player() {
                   </div>
                 )}
 
-                {/* ─────────────────────────────────────────────
-                 * SECCIÓN: SEGMENTO
-                 * ───────────────────────────────────────────── */}
-                {rightTab === "segment" && (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Scissors className="w-4 h-4 text-primary" />
-                      <span className="text-sm font-medium">Grabación por Segmento</span>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      Marca inicio y fin mientras el video reproduce, luego grábalo.
-                    </p>
-
-                    {/* Modo bucle */}
-                    <div className="flex items-center gap-2 p-2 rounded-lg bg-card border border-border">
-                      <Checkbox
-                        id="segment-mode"
-                        checked={isSegmentMode}
-                        onCheckedChange={(v) => setIsSegmentMode(!!v)}
-                        data-testid="checkbox-segment-mode"
-                      />
-                      <Label htmlFor="segment-mode" className="text-xs cursor-pointer">Modo bucle del segmento</Label>
-                    </div>
-
-                    {/* Info del segmento */}
-                    <div className="segment-highlight rounded-lg p-3 space-y-1.5">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-muted-foreground">Inicio:</span>
-                        <span className="font-mono text-primary font-semibold" data-testid="text-segment-start">{formatTime(segmentStart)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs">
-                        <span className="text-muted-foreground">Fin:</span>
-                        <span className="font-mono text-primary font-semibold" data-testid="text-segment-end">{formatTime(segmentEnd)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs">
-                        <span className="text-muted-foreground">Duración:</span>
-                        <span className="font-mono text-muted-foreground">{formatTime(Math.max(0, segmentEnd - segmentStart))}</span>
-                      </div>
-                    </div>
-
-                    {/* Botones de marcado */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button variant="outline" size="sm" onClick={markSegmentStart} className="gap-1 text-xs" data-testid="button-mark-start">
-                        <Clock className="w-3 h-3 text-green-400" /> Marcar Inicio
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={markSegmentEnd} className="gap-1 text-xs" data-testid="button-mark-end">
-                        <Clock className="w-3 h-3 text-red-400" /> Marcar Fin
-                      </Button>
-                    </div>
-
-                    <Separator />
-                    {!isRecording ? (
-                      <Button
-                        onClick={startSegmentRecording}
-                        className="w-full gap-2" size="sm"
-                        disabled={segmentEnd <= segmentStart}
-                        data-testid="button-start-recording"
-                      >
-                        <Circle className="w-3 h-3 fill-destructive text-destructive" /> Grabar Segmento
-                      </Button>
-                    ) : (
-                      <Button
-                        onClick={stopSegmentRecording}
-                        variant="destructive"
-                        className="w-full gap-2 animate-pulse" size="sm"
-                        data-testid="button-stop-recording"
-                      >
-                        <Square className="w-3 h-3" /> Detener Grabación
-                      </Button>
-                    )}
-                    <p className="text-[10px] text-muted-foreground text-center">El segmento se descargará en formato WebM</p>
-                  </div>
-                )}
-
-                {/* ─────────────────────────────────────────────
-                 * SECCIÓN: COMPARTIR
-                 * ───────────────────────────────────────────── */}
-                {rightTab === "share" && (
-                  <div className="space-y-2.5">
-                    <div className="flex items-center gap-2">
-                      <Share2 className="w-4 h-4 text-primary" />
-                      <span className="text-sm font-medium">Compartir</span>
-                    </div>
-
-                    <button onClick={() => openShare(socialLinks.whatsapp, "WhatsApp")} className="social-btn w-full flex items-center gap-3 p-3 rounded-lg bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/20 transition-all" data-testid="button-share-whatsapp">
-                      <SiWhatsapp className="w-5 h-5 text-[#25D366]" />
-                      <div className="text-left">
-                        <p className="text-sm font-medium">WhatsApp</p>
-                        <p className="text-[10px] text-muted-foreground">Compartir enlace</p>
-                      </div>
-                    </button>
-
-                    <button onClick={() => openShare(socialLinks.telegram, "Telegram")} className="social-btn w-full flex items-center gap-3 p-3 rounded-lg bg-[#2CA5E0]/10 hover:bg-[#2CA5E0]/20 border border-[#2CA5E0]/20 transition-all" data-testid="button-share-telegram">
-                      <SiTelegram className="w-5 h-5 text-[#2CA5E0]" />
-                      <div className="text-left">
-                        <p className="text-sm font-medium">Telegram</p>
-                        <p className="text-[10px] text-muted-foreground">Compartir enlace</p>
-                      </div>
-                    </button>
-
-                    <button onClick={() => openShare(socialLinks.facebook, "Facebook")} className="social-btn w-full flex items-center gap-3 p-3 rounded-lg bg-[#1877F2]/10 hover:bg-[#1877F2]/20 border border-[#1877F2]/20 transition-all" data-testid="button-share-facebook">
-                      <SiFacebook className="w-5 h-5 text-[#1877F2]" />
-                      <div className="text-left">
-                        <p className="text-sm font-medium">Facebook</p>
-                        <p className="text-[10px] text-muted-foreground">Compartir en muro</p>
-                      </div>
-                    </button>
-
-                    <button onClick={() => openShare(socialLinks.instagram, "Instagram")} className="social-btn w-full flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-[#E1306C]/10 to-[#F77737]/10 hover:from-[#E1306C]/20 hover:to-[#F77737]/20 border border-[#E1306C]/20 transition-all" data-testid="button-share-instagram">
-                      <SiInstagram className="w-5 h-5 text-[#E1306C]" />
-                      <div className="text-left">
-                        <p className="text-sm font-medium">Instagram</p>
-                        <p className="text-[10px] text-muted-foreground">Copiar enlace</p>
-                      </div>
-                    </button>
-
-                    <Separator />
-                    <Button
-                      variant="outline" size="sm" className="w-full gap-2"
-                      onClick={() => { navigator.clipboard.writeText(window.location.href); toast({ title: "Enlace copiado" }); }}
-                      data-testid="button-copy-link"
-                    >
-                      <Link2 className="w-4 h-4" /> Copiar enlace
-                    </Button>
-                  </div>
-                )}
 
               </div>
             </div>
