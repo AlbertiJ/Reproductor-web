@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<!--
+  ╔══════════════════════════════════════════════════════╗
+  ║  ROCIO Firefox Plugin — popup.html                  ║
+  ║  Interfaz emergente del botón de la extensión       ║
+  ╚══════════════════════════════════════════════════════╝
+-->
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rocio Reproductor</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+  <!-- ── ENCABEZADO ── -->
+  <header class="header">
+    <div class="logo">
+      <span class="logo-icon">▶</span>
+      <div>
+        <h1 class="logo-title">Rocio</h1>
+        <p class="logo-sub">Reproductor Multimedia</p>
+      </div>
+    </div>
+    <!-- Indicador de servidor local -->
+    <div id="server-status" class="status-dot status-unknown" title="Estado del servidor local"></div>
+  </header>
+
+  <!-- ── PESTAÑAS DE NAVEGACIÓN ── -->
+  <nav class="tabs">
+    <button class="tab active" data-tab="player">Reproducir</button>
+    <button class="tab" data-tab="url">URL</button>
+    <button class="tab" data-tab="segment">Segmento</button>
+    <button class="tab" data-tab="share">Compartir</button>
+  </nav>
+
+  <!-- ── PANEL: REPRODUCTOR ── -->
+  <section id="tab-player" class="panel active">
+
+    <!-- Área de video -->
+    <div class="video-container" id="video-container">
+      <video id="video-player" controls></video>
+      <div class="video-placeholder" id="video-placeholder">
+        <span class="placeholder-icon">▶</span>
+        <p>Selecciona o pega un archivo</p>
+      </div>
+    </div>
+
+    <!-- Controles rápidos -->
+    <div class="controls">
+      <button class="btn btn-icon" id="btn-rewind" title="Retroceder 10s">«</button>
+      <button class="btn btn-primary" id="btn-play-pause" title="Play / Pausa">▶</button>
+      <button class="btn btn-icon" id="btn-forward" title="Adelantar 10s">»</button>
+    </div>
+
+    <!-- Velocidad de reproducción -->
+    <div class="speed-row">
+      <span class="label">Velocidad:</span>
+      <div class="speed-buttons">
+        <button class="speed-btn" data-rate="0.5">0.5x</button>
+        <button class="speed-btn active" data-rate="1">1x</button>
+        <button class="speed-btn" data-rate="1.5">1.5x</button>
+        <button class="speed-btn" data-rate="2">2x</button>
+      </div>
+    </div>
+
+    <!-- Botón cargar archivo local -->
+    <label class="btn btn-outline btn-full" for="file-input">
+      ↑ Abrir archivo local
+      <input type="file" id="file-input" accept="video/*,audio/*" hidden />
+    </label>
+
+    <!-- Botón abrir en pestaña completa -->
+    <button class="btn btn-outline btn-full" id="btn-open-full">
+      ⊞ Abrir reproductor completo
+    </button>
+  </section>
+
+  <!-- ── PANEL: URL EXTERNA ── -->
+  <section id="tab-url" class="panel">
+    <div class="form-group">
+      <label class="label">URL de Video / Audio</label>
+      <div class="input-row">
+        <input
+          type="url"
+          id="url-input"
+          placeholder="https://youtube.com/watch?v=..."
+          class="input"
+        />
+        <button class="btn btn-primary" id="btn-load-url">Cargar</button>
+      </div>
+    </div>
+
+    <!-- Botón para capturar URL de la pestaña activa -->
+    <button class="btn btn-outline btn-full" id="btn-capture-tab">
+      ⊕ Tomar URL de pestaña activa
+    </button>
+
+    <!-- Botón pegar desde portapapeles -->
+    <button class="btn btn-outline btn-full" id="btn-paste-clip">
+      ⊘ Pegar desde portapapeles
+    </button>
+
+    <div id="url-status" class="status-msg"></div>
+
+    <div class="platforms">
+      <span class="platform-badge">YouTube</span>
+      <span class="platform-badge">Vimeo</span>
+      <span class="platform-badge">MP4 directo</span>
+      <span class="platform-badge">MP3 directo</span>
+    </div>
+  </section>
+
+  <!-- ── PANEL: SEGMENTO DE GRABACIÓN ── -->
+  <section id="tab-segment" class="panel">
+    <div class="segment-info">
+      <div class="segment-row">
+        <span class="label">Inicio:</span>
+        <span id="seg-start-display" class="time-display">0:00</span>
+        <button class="btn btn-sm" id="btn-mark-start">Marcar</button>
+      </div>
+      <div class="segment-row">
+        <span class="label">Fin:</span>
+        <span id="seg-end-display" class="time-display">0:00</span>
+        <button class="btn btn-sm" id="btn-mark-end">Marcar</button>
+      </div>
+      <div class="segment-row">
+        <span class="label">Duración:</span>
+        <span id="seg-duration-display" class="time-display muted">0:00</span>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="label">O ingresa tiempos manualmente</label>
+      <div class="input-row">
+        <input type="number" id="seg-start-input" placeholder="Inicio (s)" class="input" min="0" step="0.1" />
+        <input type="number" id="seg-end-input" placeholder="Fin (s)" class="input" min="0" step="0.1" />
+      </div>
+    </div>
+
+    <label class="checkbox-row" id="loop-check-row">
+      <input type="checkbox" id="loop-segment" />
+      <span>Reproducir en bucle el segmento</span>
+    </label>
+
+    <button class="btn btn-danger btn-full" id="btn-record-segment">
+      ● Grabar segmento
+    </button>
+  </section>
+
+  <!-- ── PANEL: COMPARTIR ── -->
+  <section id="tab-share" class="panel">
+    <p class="label" style="margin-bottom:8px">Compartir reproductor actual:</p>
+
+    <button class="social-btn whatsapp" id="share-whatsapp">
+      <span class="social-icon">📱</span> WhatsApp
+    </button>
+    <button class="social-btn telegram" id="share-telegram">
+      <span class="social-icon">✈</span> Telegram
+    </button>
+    <button class="social-btn facebook" id="share-facebook">
+      <span class="social-icon">f</span> Facebook
+    </button>
+    <button class="social-btn instagram" id="share-instagram">
+      <span class="social-icon">◎</span> Instagram
+    </button>
+
+    <hr class="divider" />
+
+    <div class="input-row">
+      <input type="text" id="share-url-display" class="input" readonly placeholder="URL del reproductor..." />
+      <button class="btn btn-primary" id="btn-copy-link">Copiar</button>
+    </div>
+  </section>
+
+  <!-- ── PIE ── -->
+  <footer class="footer">
+    <span>Rocio v1.0</span>
+    <a href="#" id="server-link">Servidor local</a>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
